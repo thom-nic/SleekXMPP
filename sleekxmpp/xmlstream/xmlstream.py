@@ -330,9 +330,9 @@ class XMLStream(object):
 		'''
 		Disconnects and shuts down all event threads.
 		'''
-		self.disconnect()
 		self.run = False
 		self.scheduler.run = False
+		self.disconnect()
 
 	def incoming_filter(self, xmlobj):
 		return xmlobj
