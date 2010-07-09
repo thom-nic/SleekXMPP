@@ -112,7 +112,7 @@ class basexmpp(object):
 		except:
 			logging.exception("Unable to load plugin: %s", plugin )
 
-            
+
 	def register_plugins(self):
 		"""Initiates all plugins in the plugins/__init__.__all__"""
 		if self.plugin_whitelist:
@@ -138,7 +138,7 @@ class basexmpp(object):
 		self.registerHandler(XMLCallback('add_handler_%s' % self.getNewId(), MatchXMLMask(mask), pointer, threaded, disposable, instream))
 	
 	def getId(self):
-		return "%x".upper() % self.id
+		return "%X" % self.id
 
 	def sendXML(self, data, mask=None, timeout=10):
 		return self.send(self.tostring(data), mask, timeout)
@@ -158,40 +158,33 @@ class basexmpp(object):
 		if mask is not None:
 			return waitfor.wait(timeout)
 	
-	def makeIq(self, id=0, ifrom=None):
-		return self.Iq().setValues({'id': id, 'from': ifrom})
-	
 	def makeIqGet(self, queryxmlns = None):
+		# TODO this should take a 'to' param since more often than not you set 
+		# iq['to']=whatever immediately after.
 		iq = self.Iq().setValues({'type': 'get'})
 		if queryxmlns:
 			iq.append(ET.Element("{%s}query" % queryxmlns))
 		return iq
 	
 	def makeIqResult(self, id):
+		# TODO this should take a 'to' param since more often than not you set 
+		# iq['to']=whatever immediately after.
 		return self.Iq().setValues({'id': id, 'type': 'result'})
 	
 	def makeIqSet(self, sub=None):
+		# TODO this should take a 'to' param since more often than not you set 
+		# iq['to']=whatever immediately after.
 		iq = self.Iq().setValues({'type': 'set'})
 		if sub != None:
 			iq.append(sub)
 		return iq
 
 	def makeIqError(self, id, type='cancel', condition='feature-not-implemented', text=None):
+		# TODO not used.
 		iq = self.Iq().setValues({'id': id})
 		iq['error'].setValues({'type': type, 'condition': condition, 'text': text})
 		return iq
 
-	def makeIqQuery(self, iq, xmlns):
-		query = ET.Element("{%s}query" % xmlns)
-		iq.append(query)
-		return iq
-	
-	def makeQueryRoster(self, iq=None):
-		query = ET.Element("{jabber:iq:roster}query")
-		if iq:
-			iq.append(query)
-		return query
-	
 	def add_event_handler(self, name, pointer, threaded=False, disposable=False):
 		if not name in self.event_handlers:
 			self.event_handlers[name] = []
