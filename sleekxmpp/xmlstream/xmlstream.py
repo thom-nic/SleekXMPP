@@ -140,7 +140,9 @@ class XMLStream(object):
 
 				if self.use_ssl and self.ssl_support:
 					logging.debug("Socket Wrapped for SSL")
-					self.socket = ssl.wrap_socket(self.socket,ca_certs=self.ca_certs)
+					cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
+					self.socket = ssl.wrap_socket(self.socket,
+					        ca_certs=self.ca_certs, cert_reqs=cert_policy)
 				
 				self.socket.connect(self.address)
 				self.filesocket = self.socket.makefile('rb', 0)
@@ -169,12 +171,18 @@ class XMLStream(object):
 
 	def startTLS(self):
 		"Handshakes for TLS"
+		# TODO since this is not part of the 'connectTCP' method, it does not quiesce if 
+		# The TLS negotiation throws an SSLError.  It really should.  Worse yet, some 
+		# errors might be considered fatal (like certificate verification failure) in which
+		# case, should we even attempt to re-connect at all?
 		if self.ssl_support:
 			logging.info("Negotiating TLS")
 #			self.realsocket = self.socket # NOT USED
+			cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
 			self.socket = ssl.wrap_socket(self.socket, 
 					ssl_version=ssl.PROTOCOL_TLSv1, 
-					do_handshake_on_connect=False, 
+					do_handshake_on_connect=False,
+					cert_reqs=cert_policy,
 					ca_certs=self.ca_certs)
 			self.socket.do_handshake()
 			if sys.version_info < (3,0):
@@ -219,7 +227,7 @@ class XMLStream(object):
 		while not self.quit.is_set():
 			if not self.state.ensure('connected',wait=2, block_on_transition=True): continue
 			try:
-				self.sendPriorityRaw(self.stream_header)
+				self.sendRaw(self.stream_header, priority=0, init=True)
 				self.__readXML() # this loops until the stream is terminated.
 			except socket.timeout:
 				# TODO currently this will re-send a stream header if this exception occurs.  
@@ -299,12 +307,9 @@ class XMLStream(object):
 				reconnect = (self.should_reconnect and not self.quit.is_set())
 				self.disconnect(reconnect=reconnect, error=True)
 	
-	def sendRaw(self, data):
-		self.sendqueue.put((1, data))
-		return True
-	
-	def sendPriorityRaw(self, data):
-		self.sendqueue.put((0, data))
+	def sendRaw( self, data, priority=5, init=False ):
+		if not self.state.ensure('connected'): return False
+		self.sendqueue.put((priority, data))
 		return True
 	
 	def disconnect(self, reconnect=False, error=False):
@@ -316,7 +321,7 @@ class XMLStream(object):
 			logging.debug("Disconnecting...")
 			# don't send a footer on error; if the stream is already closed, 
 			# this won't get sent until the stream is re-initialized!
-			if not error: self.sendRaw(self.stream_footer) #send end of stream
+			if not error: self.sendRaw(self.stream_footer,init=True) #send end of stream
 			try:
 #				self.socket.shutdown(socket.SHUT_RDWR)
 				self.socket.close()
