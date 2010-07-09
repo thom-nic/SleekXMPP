@@ -50,6 +50,7 @@ class RestartStream(Exception):
     resending the stream header.
     """
 
+DEFAULT_KEEPALIVE = 300 # send a single byte every 5 minutes 
 
 class XMLStream(object):
     """
@@ -195,6 +196,9 @@ class XMLStream(object):
 
         self.auto_reconnect = True
         self.is_client = False
+        
+        self.keep_alive = DEFAULT_KEEPALIVE
+        self._last_sent_time = time.time()
 
         signal.signal(signal.SIGHUP, self._handle_kill)
         signal.signal(signal.SIGTERM, self._handle_kill) # used in Windows
@@ -875,13 +879,18 @@ class XMLStream(object):
                 try:
                     data = self.send_queue.get(True, 1)[1]
                 except queue.Empty:
+                    if self._last_sent_time + self.keep_alive < time.time():    
+                        self.socket.sendall(' ')
+                        self._last_sent_time = time.time()
                     continue
                 logging.debug("SEND: %s" % data)
                 try:
                     self.socket.send(data.encode('utf-8'))
+                    self._last_sent_time = time.time()
                 except:
                     logging.warning("Failed to send %s" % data)
                     self.disconnect(self.auto_reconnect)
+                    
         except KeyboardInterrupt:
             logging.debug("Keyboard Escape Detected in _send_thread")
             self.disconnect()
