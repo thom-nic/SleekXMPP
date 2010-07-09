@@ -7,6 +7,8 @@ from . import base
 import logging
 import threading
 import time
+import random
+import base64
 from .. xmlstream.stanzabase import ElementBase, ET, JID
 from sleekxmpp.stanza.error import Error
 from sleekxmpp.stanza.iq import Iq
@@ -16,17 +18,23 @@ from xml.etree.ElementTree import tostring
 
 XMLNS = 'http://jabber.org/protocol/ibb'
 
-def sendAckIQ(self, xmpp, to, id):
+def sendAckIQ(xmpp, to, id):
     iq = xmpp.makeIqResult(id=id)
     iq['to'] = to
-    iq.send()
+    iq.send(priority=1)
     
-def sendCloseStream(self, xmpp, to, sid):
+def sendCloseStream(xmpp, to, sid):
     close = ET.Element('{%s}close' %XMLNS, sid=sid)
-    iq = self.xmpp.makeIqSet()
+    iq = xmpp.makeIqSet()
     iq['to'] = to
     iq.setPayload(close)
-    iq.send()
+    iq.send(priority=1)
+    
+def generateSid():
+    sid = ''
+    for i in range(7):
+        sid+=hex(int(random.random()*65536*4096))[2:]
+    return sid[:8].upper()
 
 
 class xep_0047(base.base_plugin):
@@ -44,16 +52,14 @@ class xep_0047(base.base_plugin):
         self.saveNamePrefix = self.config.get('saveNamePrefix', 'xep_0047_')
         self.overwriteFile = self.config.get('overwriteFile', True)
         self.stanzaType = self.config.get('stanzaType', 'iq')
-        self.maxSendThreads = self.config.get('maxSendThreads', 1)
-        self.maxReceiveThreads = self.config.get('maxReceiveThreads', 1)
+        self.maxSessions = self.config.get('maxSessions', 1)
         
         #thread setup
-        self.receiveThreads = {} #id:thread
-        self.sendThreads = {}
+        self.streamSessions = {} #id:thread
         
         #add handlers to listen for incoming requests
         self.xmpp.add_handler("<iq type='set'><open xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleIncomingTransferRequest, threaded=True)
-        self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleStreamClosed, threaded=True)
+        self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleStreamClosed, threaded=False)
         
     def post_init(self):
         self.post_inited = True
@@ -87,17 +93,17 @@ class xep_0047(base.base_plugin):
     def _handleIncomingTransferRequest(self, xml):
         logging.debug("incoming request to open file transfer stream")
         logging.debug(tostring(xml))
-        if self.acceptTransfers and len(self.receiveThreads) < self.maxReceiveThreads:
+        if self.acceptTransfers and len(self.streamSessions) < self.maxSessions:
             elem = xml.find('{%s}' %XMLNS + 'open')
-            self.receiveThreads[elem.get('sid')] = ReceiverThread(xmpp=self.xmpp, sid=elem.get('sid'))
-            self.receiveThreads[elem.get('sid')].start()
-            self.sendAckIQ(xmpp=self.xmpp, to=xml.get('from'), id=xml.get('id'))
+            self.streamSessions[elem.get('sid')] = ByteStreamSession(xmpp=self.xmpp, sid=elem.get('sid'), otherPartyJid=xml.get('from'))
+            self.streamSessions[elem.get('sid')].start()
+            sendAckIQ(xmpp=self.xmpp, to=xml.get('from'), id=xml.get('id'))
         else: #let the requesting party know we are not accepting file transfers 
             iq = self.xmpp.makeIqError(id=xml.get('id'))
             iq['to'] = xml.get('from')
             iq['error']['type'] = 'cancel'
             iq.setCondition('not-acceptable')
-            iq.send()
+            iq.send(priority=1)
         
     def _handleStreamClosed(self, xml):
         '''
@@ -106,55 +112,69 @@ class xep_0047(base.base_plugin):
         elem = xml.find('{%s}' %XMLNS + 'close')
         sid = elem.get('sid')
         
-        thread = None
-        if self.receiveThreads.get(sid):
-            thread = self.receiveThreads.get(sid)
-            del self.receiveThreads[sid]
-        elif self.sendThreads.get(sid):
-            thread = self.sendThreads.get(sid)
-            del self.sendThreads[sid]
+        if self.streamSessions.get(sid):
+            session = self.streamSessions.get(sid)
+            del self.streamSessions[sid]
+            session.handleEndStream()
+            session.join(5)
+            del session
+            sendAckIQ(self.xmpp, xml.get('from'), xml.get('id'))
         else: #We don't know about this stream, send error
             iq = self.xmpp.makeIqError(id=xml.get('id'))
             iq['to'] = xml.get('from')
             iq['error']['type'] = 'cancel'
             iq.setCondition('item-not-found')
-            iq.send()
-
-        if thread:
-            thread.handleEndStream()
-            thread.join(5)
-            del thread
-            self.sendAckIQ(self.xmpp, xml.get('from'), xml.get('id'))
+            iq.send(priority=1)
         
+class ByteStreamSession(threading.Thread):
     
-class ReceiverThread(threading.Thread):
-    
-    def __init__(self, xmpp, sid):
+    def __init__(self, xmpp, sid, otherPartyJid):
+        threading.Thread.__init__(self, name='bytestream_session_%s' %sid)
         self.processPackets = True
         self.__xmpp = xmpp
         self.__sid = sid
         self.__payloads = []
-        threading.Thread.__init__(self, name='receive_thread_%s' %sid)
+        self.__incSeqId = -1
+        self.__outSeqId = -1
+        self.__incSeqLock = threading.Lock()
+        self.__outSeqLock = threading.Lock()
         
+        self.otherPartyJid = otherPartyJid
         #register to start receiving file packets
-        self.__xmpp.registerHandler(XMLCallback('file_receiver_message_%s' %self.__sid, MatchXMLMask("<message><data xmlns='%s' sid='%s' /></message>" %(XMLNS, self.__sid)), self.handlePacket, False, False, False))
-        self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.__sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.__sid)), self.handlePacket, False, False, False))
+        self.__xmpp.registerHandler(XMLCallback('file_receiver_message_%s' %self.__sid, MatchXMLMask("<message><data xmlns='%s' sid='%s' /></message>" %(XMLNS, self.__sid)), self._handlePacket, False, False, False))
+        self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.__sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.__sid)), self._handlePacket, False, False, False))
     
-        
     def run(self):
-        while self.processPackets or len(self.__payloads) > 0:
+        while self.processPackets:
             logging.debug("packet processing for __sid %s" %self.__sid)
             time.sleep(2)
             #TODO: add packet processing logic
 
         logging.debug("finished processing packets")
         
-    def handlePacket(self, xml):
-        elem = xml.find('{%s}' %XMLNS + 'data')
-        self.__payloads.append(elem.text)
-       
-        if 'iq' in xml.tag.lower():
-            self.sendAckIQ(self.__xmpp, xml.get('from'), xml.get('id'))
+    def getNextIncSeqId(self):
+        with self.__incSeqLock:
+            self.__incSeqId += 1
+            return self.__incSeqId
+    
+    def getNextOutSeqId(self):
+        with self.__outSeqLock:
+            self.__outSeqId += 1
+            return self.__outSeqId
+        
+    def _handlePacket(self, xml):
+        #ensure the data packet is from the other party we are conversing with
+        if xml.get('id') == self.otherPartyJid:
+            elem = xml.find('{%s}' %XMLNS + 'data')
+            self.__payloads.append(elem.text)
+            
+            if 'iq' in xml.tag.lower():
+                self.sendAckIQ(self.__xmpp, xml.get('from'), xml.get('id'))
+        else:
+            #Ignore the input... Should we close the stream, something is wrong
+            #if we get a packet from a different user on this byte stream.  Could
+            #possibly be an attack
+            pass
       
     def handleEndStream(self):
         logging.debug("end of stream. remove data handlers")
@@ -164,35 +184,8 @@ class ReceiverThread(threading.Thread):
         #TODO: signal the thread runner to assemble the packets and save the file
         self.processPackets = False
         
-    
-class SenderThread(threading.Thread):
-    '''
-    What about throttling? How long to wait to send next message?
-    '''
-    def __init__(self, xmpp, sid, filepath, stanzaType):
-        self.seqLock = threading.Lock()
-        self.seqId = -1
-        self.__xmpp = xmpp
-        self.__sid = sid
-        self.__stanzaType = stanzaType
-        
-        self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.__sid, MatchXMLMask("<iq type='result'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.__sid)), self.handlePacket, False, False, False))
-        
-    def getNextSeqId(self):
-        with self.seqLock:
-            self.seqId += 1
-            return self.seqId
-    
-    def run(self):
-        pass
-    
     def getStatus(self):
         pass
     
     def cancelStream(self):
         pass
-    
-    def handleEndStream(self):
-        #clean up any handlers
-        logging.debug("end of stream called, stop sending if we haven't already")
-        
