@@ -16,6 +16,19 @@ from xml.etree.ElementTree import tostring
 
 XMLNS = 'http://jabber.org/protocol/ibb'
 
+def sendAckIQ(self, xmpp, to, id):
+    iq = xmpp.makeIqResult(id=id)
+    iq['to'] = to
+    iq.send()
+    
+def sendCloseStream(self, xmpp, to, sid):
+    close = ET.Element('{%s}close' %XMLNS, sid=sid)
+    iq = self.xmpp.makeIqSet()
+    iq['to'] = to
+    iq.setPayload(close)
+    iq.send()
+
+
 class xep_0047(base.base_plugin):
     '''
     In-band file transfer for __xmpp.
@@ -40,23 +53,45 @@ class xep_0047(base.base_plugin):
         
         #add handlers to listen for incoming requests
         self.xmpp.add_handler("<iq type='set'><open xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleIncomingTransferRequest, threaded=True)
-        self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self.streamClosed, threaded=True)
+        self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleStreamClosed, threaded=True)
         
     def post_init(self):
         self.post_inited = True
         
     def sendFile(self, filePath, threaded=True):
+        '''
+        This method will block until timeout is reached waiting for a response
+        from the receipent.
+        The receiver will either:
+        A) acknowledge the transfer and a session will start returnning the sid
+        B) deny the transfer and this method will throw an exception 
+        
+        The returned sid can be used to check on the status of the transfer or cancel it.
+        '''
         #TODO use this method to send a file
         logging.debug("About to send file: %s" %filePath)   
+        #send the open request
     
+    def getSendStatus(self, sid):
+        '''
+        Returns the status of the transfer specified by the sid
+        '''
+        #TODO: implement this method and figure out the return type, just just a dict of items.
+    
+    def cancelSend(self, sid):
+        '''
+        cancels an outgoing file transfer
+        '''
+        #TODO: implement canceling a file transfer
+        
     def _handleIncomingTransferRequest(self, xml):
         logging.debug("incoming request to open file transfer stream")
         logging.debug(tostring(xml))
         if self.acceptTransfers and len(self.receiveThreads) < self.maxReceiveThreads:
             elem = xml.find('{%s}' %XMLNS + 'open')
-            self.receiveThreads[elem.get('sid')] = ReceiverThread(caller=self, xmpp=self.xmpp, sid=elem.get('sid'))
+            self.receiveThreads[elem.get('sid')] = ReceiverThread(xmpp=self.xmpp, sid=elem.get('sid'))
             self.receiveThreads[elem.get('sid')].start()
-            self.sendAck(to=xml.get('from'), id=xml.get('id'))
+            self.sendAckIQ(xmpp=self.xmpp, to=xml.get('from'), id=xml.get('id'))
         else: #let the requesting party know we are not accepting file transfers 
             iq = self.xmpp.makeIqError(id=xml.get('id'))
             iq['to'] = xml.get('from')
@@ -64,7 +99,10 @@ class xep_0047(base.base_plugin):
             iq.setCondition('not-acceptable')
             iq.send()
         
-    def streamClosed(self, xml):
+    def _handleStreamClosed(self, xml):
+        '''
+        Called when a stream closed event is received.
+        '''
         elem = xml.find('{%s}' %XMLNS + 'close')
         sid = elem.get('sid')
         
@@ -86,26 +124,13 @@ class xep_0047(base.base_plugin):
             thread.handleEndStream()
             thread.join(5)
             del thread
-            self.sendAck(xml.get('from'), xml.get('id'))
-        
-    def sendCloseStream(self, to, sid):
-        close = ET.Element('{%s}close' %XMLNS, sid=sid)
-        iq = self.xmpp.makeIqSet()
-        iq['to'] = to
-        iq.setPayload(close)
-        iq.send()
-        
-    def sendAck(self, to, id):
-        iq = self.xmpp.makeIqResult(id=id)
-        iq['to'] = to
-        iq.send()
+            self.sendAckIQ(self.xmpp, xml.get('from'), xml.get('id'))
         
     
 class ReceiverThread(threading.Thread):
     
-    def __init__(self, caller, xmpp, sid):
+    def __init__(self, xmpp, sid):
         self.processPackets = True
-        self.__caller = caller
         self.__xmpp = xmpp
         self.__sid = sid
         self.__payloads = []
@@ -129,7 +154,7 @@ class ReceiverThread(threading.Thread):
         self.__payloads.append(elem.text)
        
         if 'iq' in xml.tag.lower():
-            self.__caller.sendAck(xml.get('from'), xml.get('id'))
+            self.sendAckIQ(self.__xmpp, xml.get('from'), xml.get('id'))
       
     def handleEndStream(self):
         logging.debug("end of stream. remove data handlers")
@@ -141,11 +166,33 @@ class ReceiverThread(threading.Thread):
         
     
 class SenderThread(threading.Thread):
-    def __init__(self):
-        pass
+    '''
+    What about throttling? How long to wait to send next message?
+    '''
+    def __init__(self, xmpp, sid, filepath, stanzaType):
+        self.seqLock = threading.Lock()
+        self.seqId = -1
+        self.__xmpp = xmpp
+        self.__sid = sid
+        self.__stanzaType = stanzaType
+        
+        self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.__sid, MatchXMLMask("<iq type='result'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.__sid)), self.handlePacket, False, False, False))
+        
+    def getNextSeqId(self):
+        with self.seqLock:
+            self.seqId += 1
+            return self.seqId
     
     def run(self):
         pass
     
-    def handleEndStream(self):
+    def getStatus(self):
         pass
+    
+    def cancelStream(self):
+        pass
+    
+    def handleEndStream(self):
+        #clean up any handlers
+        logging.debug("end of stream called, stop sending if we haven't already")
+        
