@@ -91,7 +91,7 @@ class xep_0047(base.base_plugin):
         -TooManySessionsException will be raised if there are already more than 
         self.maxSessions running (configurable via plugin configuration)
         -Exception will be raised if the sender is not available
-        -Exception will be raised if the sender denys the transfer request
+        -NotAcceptableException will be raised if the sender denys the transfer request
         -InBandFailedException will be raised if there is an error during the
         file transfer
         '''
@@ -112,8 +112,7 @@ class xep_0047(base.base_plugin):
             iq.setPayload(openElem)
             result = iq.send(block=True, timeout=10, priority=1)
             if result.get('type') != 'result':
-                #error setting up the stream
-                raise Exception('Error setting up the stream %s' %result)
+                raise NotAcceptableException('Error setting up the stream %s' %result)
             
             self.streamSessions[sid] = ByteStreamSession(self.xmpp, sid, to, self.transferTimeout, self.prefBlockSize)
             
@@ -367,7 +366,9 @@ class TooManySessionsException(InBandTransferException):
     def __init__(self, *args, **kwargs):
         InBandTransferException.__init__(self, *args, **kwargs)
 
-
+class NotAcceptableException(InBandTransferException):
+    def __init__(self, *args, **kwargs):
+        InBandTransferException.__init__(self, *args, **kwargs)
 
     
         
