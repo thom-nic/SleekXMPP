@@ -3,7 +3,7 @@ Created on Jul 1, 2010
 
 @author: bbeggs
 '''
-from __future__ import division
+from __future__ import division, with_statement, unicode_literals
 from . import base
 import os
 try:
@@ -63,7 +63,7 @@ class xep_0047(base.base_plugin):
         self.maxSessions = self.config.get('maxSessions', 2)
         self.transferTimeout = self.config.get('transferTimeout', 120) #how long we should wait between data messages until we consider the stream invalid
         self.maxBlockSize = self.config.get('maxBlockSize', 8192)
-        self.prefBlockSize = self.config.get('prefBlockSize', 7106)
+        self.prefBlockSize = self.config.get('prefBlockSize', 4096)
         
         #thread setup
         self.streamSessions = {} #id:thread
@@ -326,7 +326,7 @@ class ByteStreamSession(threading.Thread):
         if self.__sendThread:
             raise TooManySessionsException('Can only send 1 file per byte stream')
 
-        self.__sendThread = threading.Thread(target=self._sendFile, name='Byte_Stream_Session_sender_%s' %self.sid, kwargs={'fileName':fileName})
+        self.__sendThread = threading.Thread(target=self._sendFile, name='Byte_Stream_Session_sender_%s' %self.sid, args=[fileName])
         self.__sendThread.start()
         
         if not threaded: #Block until the send is finished 
