@@ -20,7 +20,6 @@ from sleekxmpp.stanza.error import Error
 from sleekxmpp.stanza.iq import Iq
 from sleekxmpp.xmlstream.handler.xmlcallback import XMLCallback
 from sleekxmpp.xmlstream.matcher.xmlmask import MatchXMLMask
-from xml.etree.cElementTree import tostring
  
 XMLNS = 'http://jabber.org/protocol/ibb'
 STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
@@ -114,7 +113,7 @@ class xep_0047(base.base_plugin):
             result = iq.send(block=True, timeout=10, priority=1)
             if result.get('type') != 'result':
                 #error setting up the stream
-                raise Exception('Error setting up the stream %s' %tostring(result))
+                raise Exception('Error setting up the stream %s' %result)
             
             self.streamSessions[sid] = ByteStreamSession(self.xmpp, sid, to, self.transferTimeout, self.prefBlockSize)
             
@@ -150,7 +149,6 @@ class xep_0047(base.base_plugin):
         
     def _handleIncomingTransferRequest(self, xml):
         logging.debug("incoming request to open file transfer stream")
-        logging.debug(tostring(xml))
         elem = xml.find('{%s}' %XMLNS + 'open')
         with self.__streamSetupLock:
             if(self.maxBlockSize < int(elem.get('block-size'))):
@@ -326,7 +324,7 @@ class ByteStreamSession(threading.Thread):
         if self.__sendThread:
             raise TooManySessionsException('Can only send 1 file per byte stream')
 
-        self.__sendThread = threading.Thread(target=self._sendFile, name='Byte_Stream_Session_sender_%s' %self.sid, args=[fileName])
+        self.__sendThread = threading.Thread(target=self._sendFile, name='Byte_Stream_Session_sender_%s' %self.sid,  kwargs={str('fileName'): fileName}) 
         self.__sendThread.start()
         
         if not threaded: #Block until the send is finished 
