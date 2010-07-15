@@ -3,6 +3,7 @@ Created on Jul 1, 2010
 
 @author: bbeggs
 '''
+from __future__ import division
 from . import base
 import os
 try:
@@ -333,7 +334,7 @@ class ByteStreamSession(threading.Thread):
             
     def _sendFile(self, fileName):
         with open(fileName, 'rb') as file:
-            fileReadSize = int(self.__blockSize / 1.333333333333)
+            fileReadSize = int(self.__blockSize / (4/3))
             while self.process:
                 data = file.read(fileReadSize)
                 if data == '': break
