@@ -47,6 +47,28 @@ class xep_0047(base.base_plugin):
     In-band file transfer for xmpp.
     
     Currently only IQ transfer is supported
+    
+    Plugin configuration options:
+    acceptTransfers        - Boolean     - Sets the plugin to either accept or deny transfers
+    saveDirectory          - String      - The default directory that incoming file transfers will be saved in
+    saveNamePrefix         - String      - Prefix that will be prepended to the saved file name of an incoming transfer
+    overwriteFile          - Boolean     - If an incoming file transfer should overwrite a file if that file already exists
+    stanzaType             - String      - Either IQ or message,  Currently only iq is supported
+    maxSessions            - integer     - The max number of send/receive sessions that may run concurrently
+    transferTimeout        - integer     - How long should a stream session wait between messages
+    maxBlockSize           - integer     - Largest block size that a stream session should accept (limited by xmpp server)
+    prefBlockSize          - integer     - The preferred block size for file transfer
+    acceptTransferCallback - function ptr- This should be a function pointer that will return a boolean value letting the caller know if a 
+                                           file transfer should or should not be accepted.  If this option is provided the maxSessions option is ignored.
+    fileNameCallback       - function ptr- This should be a function pointer that will return a string with the full path and name a file should be saved as.  
+                                           If the provided function pointer returns None or is not provided the default saveDirectory + saveNamePrefix_sid will be used.
+                                           
+    There are also 2 events that users of this plugin can register to receive notifications:
+    FILE_FINISHED_SENDING     - This event is fired after a file send has completed
+    FILE_FINISHED_RECEIVING   - This event is fired after an incoming file transfer has completed.
+    
+    ¡¡¡¡¡¡¡¡¡When registering to receive notifications about these events the
+    callback fuctions should be registered as threaded!!!!!!!!!
     '''
        
     def plugin_init(self):
@@ -346,11 +368,23 @@ class ByteStreamSession(threading.Thread):
                 self._closeStream()
                 
     def getStatus(self):
+        '''
+        Returns an dict of the following items:
+        sid                     - the sid of this session
+        processing              - The processing state of this session
+        otherPartyJID           - The other party we are swaping bytes with
+        streamClosed            - If this ByteStream is closed or not
+        lastMessageTimestamp    - The timestamp of the last received message (ack or data packet)
+        incFileName (optional)  - if receiving a file, the full path and name of where the file is saved
+        incFileKBytes (optional)- The number of KBytes currently received
+        outFileKBytes (optional)- The number of bytes sent so far if sending a file
+        '''
         status = {}
         status['sid'] = self.sid
         status['processing'] = self.process
         status['otherPartyJID'] = self.otherPartyJid
         status['streamClosed'] = self.streamClosed
+        status['lastMessageTimestamp'] = self.__lastMessage
         if self.getSavedFileName():
             status['incFileName'] = self.getSavedFileName()
             status['incFileKBytes'] = self.__blockSize * self.__incSeqId
