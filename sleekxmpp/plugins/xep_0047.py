@@ -6,25 +6,21 @@ Created on Jul 1, 2010
 from __future__ import division, with_statement, unicode_literals
 from . import base
 import os
-from sleekxmpp.xmlstream.handler.callback import Callback
-try:
-    import queue
-except ImportError:
-    import Queue as queue
 import logging
 import threading
 import time
 import random
 import base64
-from .. xmlstream.stanzabase import ElementBase, ET, JID
-from sleekxmpp.stanza.error import Error
-from sleekxmpp.stanza.iq import Iq
-from sleekxmpp.xmlstream.handler.xmlcallback import XMLCallback
-from sleekxmpp.xmlstream.matcher.xmlmask import MatchXMLMask
-from sleekxmpp.xmlstream.matcher.id import MatcherId
+from .. xmlstream.stanzabase import ET
+from .. xmlstream.handler.xmlcallback import XMLCallback
+from .. xmlstream.matcher.xmlmask import MatchXMLMask
+from .. xmlstream.matcher.id import MatcherId
+from .. xmlstream.handler.callback import Callback 
  
 XMLNS = 'http://jabber.org/protocol/ibb'
 STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
+FILE_FINISHED_SENDING = 'BYTE_STREAM_SENDING_COMPLETE'
+FILE_FINISHED_RECEIVING = 'BYTE_STREAM_RECEIVING_COMPLETE'
 
 def sendAckIQ(xmpp, to, id):
     iq = xmpp.makeIqResult(id=id)
@@ -57,7 +53,7 @@ class xep_0047(base.base_plugin):
         self.xep = 'xep-047'
         self.description = 'in-band file transfer'
         self.acceptTransfers = self.config.get('acceptTransfers', True)
-        self.saveDirectory = self.config.get('saveDirectory', '/tmp')
+        self.saveDirectory = self.config.get('saveDirectory', '/tmp/')
         self.saveNamePrefix = self.config.get('saveNamePrefix', 'xep_0047_')
         self.overwriteFile = self.config.get('overwriteFile', True)
         self.stanzaType = self.config.get('stanzaType', 'iq') #Currently only IQ is supported
@@ -65,6 +61,10 @@ class xep_0047(base.base_plugin):
         self.transferTimeout = self.config.get('transferTimeout', 120) #how long we should wait between data messages until we consider the stream invalid
         self.maxBlockSize = self.config.get('maxBlockSize', 8192)
         self.prefBlockSize = self.config.get('prefBlockSize', 4096)
+        #callbacks
+        self.acceptTransferCallback = self.config.get('acceptTransferCallback')
+        self.fileNameCallback = self.config.get('fileNameCallback')
+        
         
         #thread setup
         self.streamSessions = {} #id:thread
@@ -128,9 +128,10 @@ class xep_0047(base.base_plugin):
         self.streamSessions[sid].sendFile(fileName, threaded)
         return sid
     
-    def getSendStatus(self, sid):
+    def getSessionStatus(self, sid):
         '''
-        Returns the status of the transfer specified by the sid
+        Returns the status of the transfer specified by the sid.  If the session
+        is not found none will be returned.
         '''
         session = self.streamSessions.get(sid)
         if session:
@@ -159,15 +160,30 @@ class xep_0047(base.base_plugin):
         logging.debug("incoming request to open file transfer stream")
         elem = xml.find('{%s}' %XMLNS + 'open')
         with self.__streamSetupLock:
+            #Check the block size
             if(self.maxBlockSize < int(elem.get('block-size'))):
                 iq = self.xmpp.makeIqError(id=xml.get('id'), condition='resource-constraint')
                 iq['to'] = xml.get('from')
                 iq['error']['type'] = 'modify'
                 iq.send(priority=1)
-                pass
+                return
             
-            if self.acceptTransfers and len(self.streamSessions) < self.maxSessions and not self.streamSessions:
-                self.streamSessions[elem.get('sid')] = ByteStreamSession(self.xmpp, elem.get('sid'), xml.get('from'), self.transferTimeout, int(elem.get('block-size')), self.saveDirectory, self.saveNamePrefix + elem.get('sid'))
+            #Check to see if the file transfer should be accepted
+            acceptTransfer = False
+            if self.acceptTransferCallback:
+                acceptTransfer = self.acceptTransferCallback()
+            else:
+                if self.acceptTransfers and len(self.streamSessions) < self.maxSessions:
+                    acceptTransfer = True
+                    
+            #Ask where to save the file if the callback is present
+            #TODO: fix this to work with non linux 
+            saveFileAs = self.saveDirectory + self.saveNamePrefix + elem.get('sid')
+            if self.fileNameCallback:
+                saveFileAs = self.fileNameCallback()
+            
+            if acceptTransfer:
+                self.streamSessions[elem.get('sid')] = ByteStreamSession(self.xmpp, elem.get('sid'), xml.get('from'), self.transferTimeout, int(elem.get('block-size')), saveFileAs)
                 self.streamSessions[elem.get('sid')].start()
                 sendAckIQ(xmpp=self.xmpp, to=xml.get('from'), id=xml.get('id'))
             else: #let the requesting party know we are not accepting file transfers 
@@ -213,7 +229,7 @@ class xep_0047(base.base_plugin):
         
 class ByteStreamSession(threading.Thread):
     
-    def __init__(self, xmpp, sid, otherPartyJid, timeout,  blockSize, recFilePath = None, recFileName = None):
+    def __init__(self, xmpp, sid, otherPartyJid, timeout,  blockSize, recFileName = None):
         threading.Thread.__init__(self, name='bytestream_session_%s' %sid)
         #When we start the session the stream will already be open
         #and we will want to process the I/O
@@ -227,10 +243,8 @@ class ByteStreamSession(threading.Thread):
         self.__outSeqLock = threading.Lock()
         self.__closeStreamLock = threading.Lock()
         self.__lastMessage = time.time()
-        self.__sendFile = None
         self.__incFile = None
         self.__sendThread = None
-        self.__lastSendAck = -1
         self.__sendAckEvent = Event()
         
         #block size needs to be a multiple of 4 for base 64 encoding, step
@@ -239,11 +253,11 @@ class ByteStreamSession(threading.Thread):
         while blockSize % 4 != 0:
             blockSize -= 1
         self.__blockSize = blockSize
+        self.__fileReadSize = int(self.__blockSize / (4/3))
         
         self.sid = sid
         self.timeout = timeout
-        self.recFilePath = recFilePath 
-        self.recFileName = recFileName
+        self.recFileName = recFileName 
         
         self.otherPartyJid = otherPartyJid
         #register to start receiving file packets
@@ -252,8 +266,8 @@ class ByteStreamSession(threading.Thread):
         
     def getSavedFileName(self):
         #TODO: this probably needs to be fixed up to work on OSes other than linux
-        if self.recFilePath and self.recFileName:
-            return self.recFilePath + '/' + self.recFileName
+        if self.recFileName:
+            return self.recFileName
         else:
             return None
         
@@ -266,7 +280,7 @@ class ByteStreamSession(threading.Thread):
         the file is closed, closing the stream if the session times out, and 
         ensuring that if a file is being sent that the send will quiesce properly.   
         '''
-        if self.recFilePath and self.recFileName:
+        if self.getSavedFileName():
             self.__incFile = open(self.getSavedFileName(), 'wb')
             
         while self.process:
@@ -289,6 +303,7 @@ class ByteStreamSession(threading.Thread):
         
         #close the file hander 
         if self.__incFile:
+            self.__xmpp.event(FILE_FINISHED_RECEIVING, {'sid': self.sid})
             self.__incFile.close()
         logging.debug("finished processing packets")
         
@@ -331,8 +346,17 @@ class ByteStreamSession(threading.Thread):
                 self._closeStream()
                 
     def getStatus(self):
-        #TODO: implement this method and figure out the return type, just just a dict of items.
-        return {}
+        status = {}
+        status['sid'] = self.sid
+        status['processing'] = self.process
+        status['otherPartyJID'] = self.otherPartyJid
+        status['streamClosed'] = self.streamClosed
+        if self.getSavedFileName():
+            status['incFileName'] = self.getSavedFileName()
+            status['incFileKBytes'] = self.__blockSize * self.__incSeqId
+        if self.__sendThread:
+            status['outFileKBytes'] = self.__fileReadSize * self.__outSeqId 
+        return status
     
     def cancelStream(self):
         '''
@@ -369,11 +393,10 @@ class ByteStreamSession(threading.Thread):
         the requested base64 encoded chunk size and sends it over the wire.  
         '''
         with open(fileName, 'rb') as file:
-            fileReadSize = int(self.__blockSize / (4/3))
             self.__sendAckEvent.set()
             while self.process:
                 if self.__sendAckEvent.wait(1): 
-                    data = file.read(fileReadSize)
+                    data = file.read(self.__fileReadSize)
                     if data == str(''): break
                     iq = self.__xmpp.makeIqSet()
                     dataElem = ET.Element('{%s}data' %XMLNS, sid=self.sid, seq=str(self.getNextOutSeqId()))
@@ -384,6 +407,7 @@ class ByteStreamSession(threading.Thread):
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=True, once=True, instream=False))
                     iq.send(block=False, priority=2)
                 
+        self.__xmpp.event(FILE_FINISHED_SENDING, {'sid': self.sid})
         self._closeStream()
         self.process = False
         
