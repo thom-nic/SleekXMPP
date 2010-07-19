@@ -135,6 +135,9 @@ class xep_0047(base.base_plugin):
             if self.xmpp.fulljid == to:
                 raise NotAcceptableException('Error setting up the stream, can not send file to ourselves %s', self.xmpp.fulljid)
             
+            if not self.xmpp.state.ensure('connected'):
+                raise Exception('Not connected to a server!')
+            
             sid = generateSid()
             iq = self.xmpp.makeIqSet()
             iq['to'] = to
