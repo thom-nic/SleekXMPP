@@ -230,12 +230,12 @@ class xep_0047(base.base_plugin):
         
     def _handleStreamClosed(self, xml):
         '''
-        Called when a stream closed event is received.
+        Another party wishes to close a stream
         '''
         elem = xml.find('{%s}' %XMLNS + 'close')
         sid = elem.get('sid')
         
-        if self.streamSessions.get(sid):
+        if self.streamSessions.get(sid) and self.streamSessions.get(sid).otherPartyJid.lower() == xml.get('from', '').lower():  
             with self.__streamSetupLock:
                 session = self.streamSessions.get(sid)
                 del self.streamSessions[sid]
@@ -339,7 +339,7 @@ class ByteStreamSession(threading.Thread):
         
         #close the file hander 
         if self.__incFile:
-            self.__xmpp.event(FILE_FINISHED_RECEIVING, {'sid': self.sid})
+            self.__xmpp.event(FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
             self.__incFile.close()
         logging.debug("finished processing packets")
         
