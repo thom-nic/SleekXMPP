@@ -20,7 +20,7 @@
 
 from __future__ import division, with_statement, unicode_literals
 from . import base
-import os
+import os, sys
 import logging
 import threading
 import time
@@ -511,7 +511,10 @@ class NotAcceptableException(InBandTransferException):
         InBandTransferException.__init__(self, *args, **kwargs)
 
 def Event(*args, **kwargs):
-    return _Event(*args, **kwargs)
+    if sys.version_info < (2,7):
+        return _Event(*args, **kwargs)
+    else:
+        return threading.Event(*args, **kwargs)
 
 class _Event(object):
 
