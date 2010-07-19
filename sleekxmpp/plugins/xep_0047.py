@@ -48,6 +48,9 @@ class xep_0047(base.base_plugin):
     
     Currently only IQ transfer is supported
     
+    Plugin will not accept a file transfer if the sender or recipient JID is the
+    same as the currently logged in JID.
+    
     Plugin configuration options:
     acceptTransfers        - Boolean     - Sets the plugin to either accept or deny transfers
     saveDirectory          - String      - The default directory that incoming file transfers will be saved in
@@ -67,8 +70,8 @@ class xep_0047(base.base_plugin):
     FILE_FINISHED_SENDING     - This event is fired after a file send has completed
     FILE_FINISHED_RECEIVING   - This event is fired after an incoming file transfer has completed.
     
-    ¡¡¡¡¡¡¡¡¡When registering to receive notifications about these events the
-    callback fuctions should be registered as threaded!!!!!!!!!
+    !!!!!!!!!!!When registering to receive notifications about these events the
+    callback functions should be registered as threaded!!!!!!!!!
     '''
        
     def plugin_init(self):
@@ -116,6 +119,7 @@ class xep_0047(base.base_plugin):
         self.maxSessions running (configurable via plugin configuration)
         -Exception will be raised if the sender is not available
         -NotAcceptableException will be raised if the sender denies the transfer request
+        or if the sender full JID is equal to the recipient 
         -InBandFailedException will be raised if there is an error during the
         file transfer
         '''
@@ -127,6 +131,9 @@ class xep_0047(base.base_plugin):
             
             if not os.path.isfile(fileName):
                 raise IOError('file: %s not found' %fileName)
+            
+            if self.xmpp.fulljid == to:
+                raise NotAcceptableException('Error setting up the stream, can not send file to ourselves %s', self.xmpp.fulljid)
             
             sid = generateSid()
             iq = self.xmpp.makeIqSet()
@@ -203,6 +210,10 @@ class xep_0047(base.base_plugin):
             saveFileAs = self.saveDirectory + self.saveNamePrefix + elem.get('sid')
             if self.fileNameCallback:
                 saveFileAs = self.fileNameCallback()
+                
+            #Do not accept a transfer from ourselves
+            if self.xmpp.fulljid == xml.get('from'):
+                acceptTransfer = False
             
             if acceptTransfer:
                 self.streamSessions[elem.get('sid')] = ByteStreamSession(self.xmpp, elem.get('sid'), xml.get('from'), self.transferTimeout, int(elem.get('block-size')), saveFileAs)
