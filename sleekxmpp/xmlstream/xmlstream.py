@@ -14,15 +14,12 @@ except ImportError:
 from . import statemachine
 from . stanzabase import StanzaBase
 from xml.etree import cElementTree
-from xml.parsers import expat
 import logging
 import random
 import socket
 import threading
 import time
 import traceback
-import types
-import xml.sax.saxutils
 from . import scheduler
 
 HANDLER_THREADS = 1
@@ -44,14 +41,15 @@ class RestartStream(Exception):
 
 stanza_extensions = {}
 
-RECONNECT_MAX_DELAY = 3600
+RECONNECT_MAX_DELAY = 360
 RECONNECT_QUIESCE_FACTOR = 1.6180339887498948 # Phi
 RECONNECT_QUIESCE_JITTER = 0.11962656472 # molar Planck constant times c, joule meter/mole
+DEFAULT_KEEPALIVE = 300 # send a single byte every 5 minutes 
 
 class XMLStream(object):
 	"A connection manager with XML events."
 
-	def __init__(self, socket=None, host='', port=0, escape_quotes=False):
+	def __init__(self, socket=None, host='', port=5222, escape_quotes=False):
 		global ssl_support
 		self.ssl_support = ssl_support
 		self.escape_quotes = escape_quotes
@@ -68,11 +66,12 @@ class XMLStream(object):
 		self.__stanza_extension = {}
 		self.__handlers = []
 
-		self.__tls_socket = None
 		self.filesocket = None
 		self.use_ssl = False
-		self.use_tls = False
 		self.ca_certs=None
+
+		self.keep_alive = DEFAULT_KEEPALIVE
+		self._last_sent_time = time.time()
 
 		self.stream_header = "<stream>"
 		self.stream_footer = "</stream>"
@@ -99,11 +98,11 @@ class XMLStream(object):
 	def setFileSocket(self, filesocket):
 		self.filesocket = filesocket
 	
-	def connect(self, host='', port=0, use_ssl=None, use_tls=None):
+	def connect(self, host='', port=5222, use_ssl=None):
 		"Establish a socket connection to the given XMPP server."
 		
 		if not self.state.transition('disconnected','connected',
-				func=self.connectTCP, args=[host, port, use_ssl, use_tls] ):
+				func=self.connectTCP, args=[host, port, use_ssl] ):
 			
 			if self.state['connected']: logging.debug('Already connected')
 			else: logging.warning("Connection failed" )
@@ -115,7 +114,7 @@ class XMLStream(object):
 		# TODO currently a caller can't distinguish between "connection failed" and
 		# "we're already trying to connect from another thread"
 
-	def connectTCP(self, host='', port=0, use_ssl=None, use_tls=None, reattempt=True):
+	def connectTCP(self, host='', port=5222, use_ssl=None, reattempt=True):
 		"Connect and create socket"
 
 		# Note that this is thread-safe by merit of being called solely from connect() which
@@ -129,14 +128,11 @@ class XMLStream(object):
 					self.address = (host, int(port))
 				if use_ssl is not None:
 					self.use_ssl = use_ssl
-				if use_tls is not None:
-					# TODO this variable doesn't seem to be used for anything!
-					self.use_tls = use_tls
 				if sys.version_info < (3, 0):
 					self.socket = filesocket.Socket26(socket.AF_INET, socket.SOCK_STREAM)
 				else:
 					self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-				self.socket.settimeout(None) #10)
+				self.socket.settimeout(None)
 
 				if self.use_ssl and self.ssl_support:
 					logging.debug("Socket Wrapped for SSL")
@@ -290,9 +286,12 @@ class XMLStream(object):
 				data = self.sendqueue.get(True,5)[1]
 				logging.debug("SEND: %s" % data)
 				self.socket.sendall(data.encode('utf-8'))
-			except queue.Empty:
-#				logging.debug('Nothing on send queue')
-				pass
+				self._last_sent_time = time.time()
+			except queue.Empty: # send keep-alive if necessary
+				now = time.time() 
+				if self._last_sent_time + self.keep_alive < now:
+					self.socket.sendall(' ')
+					self._last_sent_time = time.time()
 			except socket.timeout:
 				# this is to prevent a thread blocked indefinitely
 				logging.debug('timeout sending packet data')
@@ -338,8 +337,7 @@ class XMLStream(object):
 		'''
 		Disconnects and shuts down all event threads.
 		'''
-		self.disconnect()
-		self.quit.set()
+		self.run = False
 		self.scheduler.run = False
 		self.disconnect()
 

@@ -14,51 +14,32 @@ from . xmlstream.xmlstream import XMLStream
 from . xmlstream.xmlstream import RestartStream
 from . xmlstream.matcher.xmlmask import MatchXMLMask
 from . xmlstream.matcher.xpath import MatchXPath
-from . xmlstream.matcher.many import MatchMany
 from . xmlstream.handler.callback import Callback
-from . xmlstream.stanzabase import StanzaBase
-from . xmlstream import xmlstream as xmlstreammod
-from . stanza.message import Message
-from . stanza.iq import Iq
-import time
 import logging
 import base64
 import sys
 import random
-import copy
-from . import plugins
 from xml.etree.cElementTree import tostring
-from xml.etree.cElementTree import Element
-from cStringIO import StringIO
 
-#from . import stanza
 srvsupport = True
 try:
 	import dns.resolver
 	import dns.rdatatype
+	import dns.exception
 except ImportError:
 	srvsupport = False
-
-
-
-#class PresenceStanzaType(object):
-#	
-#	def fromXML(self, xml):
-#		self.ptype = xml.get('type')
 
 
 class ClientXMPP(basexmpp, XMLStream):
 	"""SleekXMPP's client class.  Use only for good, not evil."""
 
 	def __init__(self, jid, password, ssl=False, plugin_config = {}, plugin_whitelist=[], escape_quotes=True):
-		global srvsupport
 		XMLStream.__init__(self)
 		self.default_ns = 'jabber:client'
 		basexmpp.__init__(self)
 		self.plugin_config = plugin_config
 		self.escape_quotes = escape_quotes
 		self.set_jid(jid)
-		self.server = None
 		self.port = 5222 # not used if DNS SRV is used
 		self.plugin_whitelist = plugin_whitelist
 		self.auto_reconnect = True
@@ -75,7 +56,6 @@ class ClientXMPP(basexmpp, XMLStream):
 		self.sessionstarted = False
 		self.bound = False
 		self.bindfail = False
-		self.digest_auth_started = False
 		XMLStream.registerHandler(self, Callback('Stream Features', MatchXPath('{http://etherx.jabber.org/streams}features'), self._handleStreamFeatures, thread=True))
 		XMLStream.registerHandler(self, Callback('Roster Update', MatchXPath('{%s}iq/{jabber:iq:roster}query' % self.default_ns), self._handleRoster, thread=True))
 		#SASL Auth handlers
@@ -104,22 +84,25 @@ class ClientXMPP(basexmpp, XMLStream):
 
 	def connect(self, host=None, port=None):
 		"""Connect to the Jabber Server.  Attempts SRV lookup, and if it fails, uses
-		the JID server."""
+		the JID server.  You can optionally specify a host/port if you're not using 
+		DNS and want to connect to a server address that is different from the XMPP domain."""
 
 		if self.state['connected']: return True
 
-		if host:
-			self.server = host
+		if host: # if a host was specified, don't attempt a DNS lookup.
 			if port is None: port = self.port
 		else:
 			if not self.srvsupport:
-				logging.debug("Did not supply (address, port) to connect to and no SRV support is installed (http://www.dnspython.org).  Continuing to attempt connection, using domain from JID.")
+				logging.warn("Did not supply (address, port) to connect to and no SRV support is installed (http://www.dnspython.org).  Continuing to attempt connection, using domain from JID.")
 			else:
 				logging.debug("Since no address is supplied, attempting SRV lookup.")
 				try:
-					answers = dns.resolver.query("_xmpp-client._tcp.%s" % self.server, dns.rdatatype.SRV)
+					answers = dns.resolver.query("_xmpp-client._tcp.%s" % self.domain, dns.rdatatype.SRV)
 				except dns.resolver.NXDOMAIN:
-					logging.debug("No appropriate SRV record found.  Using JID server name.")
+					logging.info("No appropriate SRV record found for %s.  Using domain as server address.", self.domain)
+				except dns.exception.DNSException:
+					# this could be a timeout or other DNS error. Worth retrying?
+					logging.exception("DNS error during SRV query for %s.  Using domain as server address.", self.domain)
 				else:
 					# pick a random answer, weighted by priority
 					# there are less verbose ways of doing this (random.choice() with answer * priority), but I chose this way anyway 
@@ -136,17 +119,13 @@ class ClientXMPP(basexmpp, XMLStream):
 						if picked <= priority:
 							(host,port) = addresses[priority]
 							break
-					# if SRV lookup was successful, we aren't using a particular server.
-					self.server = None 
 
 		if not host:
 			# if all else fails take server from JID.
 			(host,port) = (self.domain, self.port)
-			self.server = None
 
 		logging.debug('Attempting connection to %s:%d', host, port )
-		#TODO option to not use TLS?
-		result = XMLStream.connect(self, host, port, use_tls=True)
+		result = XMLStream.connect(self, host, port)
 		if result:
 			self.event("connected")
 		else:
@@ -238,47 +217,41 @@ class ClientXMPP(basexmpp, XMLStream):
 							% base64.b64encode(b'\x00' + bytes(self.username, 'utf-8') + b'\x00' + bytes(self.password, 'utf-8')).decode('utf-8'), 
 							priority=1, init=True)
 			else:
-				logging.error("No appropriate login method.")
-				self.disconnect()
-				#if 'sasl:DIGEST-MD5' in self.features:
-				#	self._auth_digestmd5()
+				logging.error("No appropriate login method: %s", sasl_mechs)
+				self.handler_auth_fail(xml)
+				return False
 		return True
 	
 	def handler_sasl_digest_md5_auth(self, xml):
-		if self.digest_auth_started == False:
-			challenge = [item.split('=', 1) for item in base64.b64decode(xml.text).replace("\"", "").split(',', 6) ]
-			challenge = dict(challenge)
-			logging.debug("MD5 auth challenge: %s", challenge)
-			
-			if challenge.get('rspauth'): #authenticated success... send response
-				self.sendRaw("""<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>""", priority=1, init=True )
-				return
-			
-			#TODO: use realm is supplied by server, use default qop unless supplied by server
-			#Realm, nonce, qop should all be present
-			if not challenge.get('qop') or not challenge.get('nonce'):
-				logging.error("Error during digest-md5 authentication. Challenge missing critical information. Challenge: %s" %base64.b64decode(xml.text))
-				self.disconnect()
-				self.event("failed_auth")
-				return
-			#TODO: charset can be either UTF-8 or if not present use ISO 8859-1 defaulting for UTF-8 for now
-			#Compute the cnonce - a unique hex string only used in this request
-			cnonce = ""
-			for i in range(7):
-				cnonce+=hex(int(random.random()*65536*4096))[2:]
-			cnonce = base64.encodestring(cnonce)[0:-1]
-			a1 = b"%s:%s:%s" %(md5("%s:%s:%s" % (self.username, self.domain, self.password)), challenge["nonce"].encode("UTF-8"), cnonce.encode("UTF-8") )
-			a2 = "AUTHENTICATE:xmpp/%s" %self.domain
-			responseHash = md5digest("%s:%s:00000001:%s:auth:%s" %(md5digest(a1), challenge["nonce"], cnonce, md5digest(a2) ) )
-			response = 'charset=utf-8,username="%s",realm="%s",nonce="%s",nc=00000001,cnonce="%s",digest-uri="%s",response=%s,qop=%s,' \
-				% (self.username, self.domain, challenge["nonce"], cnonce, "xmpp/%s" % self.domain, responseHash, challenge["qop"])
-			self.sendRaw("<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>%s</response>" % base64.encodestring(response)[:-1],
-					priority=1, init=True )
-		else:
-			logging.warn("handler_sasl_digest_md5_auth called while digest_auth_started is True (has already begun)")
-	
+		challenge = [item.split('=', 1) for item in base64.b64decode(xml.text).replace("\"", "").split(',', 6) ]
+		challenge = dict(challenge)
+		logging.debug("MD5 auth challenge: %s", challenge)
+		
+		if challenge.get('rspauth'): #authenticated success... send response
+			self.sendRaw("""<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>""", priority=1, init=True )
+			return
+		#TODO: use realm if supplied by server, use default qop unless supplied by server
+		#Realm, nonce, qop should all be present
+		if not challenge.get('qop') or not challenge.get('nonce'):
+			logging.error("Error during digest-md5 authentication. Challenge missing critical information. Challenge: %s" %base64.b64decode(xml.text))
+			self.handler_auth_fail(xml)
+			return
+		#TODO: charset can be either UTF-8 or if not present use ISO 8859-1 defaulting for UTF-8 for now
+		#Compute the cnonce - a unique hex string only used in this request
+		cnonce = ""
+		for i in range(7):
+			cnonce+=hex(int(random.random()*65536*4096))[2:]
+		cnonce = base64.encodestring(cnonce)[0:-1]
+		a1 = b"%s:%s:%s" %(md5("%s:%s:%s" % (self.username, self.domain, self.password)), challenge["nonce"].encode("UTF-8"), cnonce.encode("UTF-8") )
+		a2 = "AUTHENTICATE:xmpp/%s" %self.domain
+		responseHash = md5digest("%s:%s:00000001:%s:auth:%s" %(md5digest(a1), challenge["nonce"], cnonce, md5digest(a2) ) )
+		response = 'charset=utf-8,username="%s",realm="%s",nonce="%s",nc=00000001,cnonce="%s",digest-uri="%s",response=%s,qop=%s,' \
+			% (self.username, self.domain, challenge["nonce"], cnonce, "xmpp/%s" % self.domain, responseHash, challenge["qop"])
+		self.sendRaw("<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>%s</response>" % base64.encodestring(response)[:-1],
+				priority=1, init=True )
+		
 	def handler_sasl_digest_md5_auth_fail(self, xml):
-		self.digest_auth_started = False
+		self.authenticated = False
 		self.handler_auth_fail(xml)
 	
 	def handler_auth_success(self, xml):
@@ -295,11 +268,10 @@ class ClientXMPP(basexmpp, XMLStream):
 	
 	def handler_bind_resource(self, xml):
 		logging.debug("Requesting resource: %s" % self.resource)
-		iq = self.Iq(stype='set')
 		res = ET.Element('resource')
 		res.text = self.resource
 		xml.append(res)
-		iq.append(xml)
+		iq = self.makeIqSet(xml)
 		response = iq.send(priority=2,init=True)
 		#response = self.send(iq, self.Iq(sid=iq['id']))
 		self.set_jid(response.xml.find('{urn:ietf:params:xml:ns:xmpp-bind}bind/{urn:ietf:params:xml:ns:xmpp-bind}jid').text)
