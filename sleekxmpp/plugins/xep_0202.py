@@ -69,9 +69,9 @@ class TimeElement:
 		elif type(utc) is str: # parse ISO string
 			dt_format = '%Y-%m-%dT%H:%M:%S'
 			if utc.find('.') > -1: dt_format += '.%f' # milliseconds in format
-			self.utc = datetime.strptime( time_str, dt_format + 'Z' )
+			self.utc = datetime.strptime( utc, dt_format + 'Z' )
 		elif type(utc) is float: # parse posix timestamp
-			self.utc = datetime.utcfromtimestamp()
+			self.utc = datetime.utcfromtimestamp(utc)
 		else: self.utc = utc
 		self.tzo = tzo
 
