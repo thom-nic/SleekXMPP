@@ -4,8 +4,9 @@ import time, threading, random, functools
 if __name__ == '__main__': 
 	import sys, os
 	sys.path.insert(0, os.getcwd())
-	import sleekxmpp.xmlstream.statemachine as sm
 
+
+import sleekxmpp.xmlstream.statemachine as sm
 
 class testStateMachine(unittest.TestCase):
 
