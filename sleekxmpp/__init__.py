@@ -250,7 +250,7 @@ class ClientXMPP(basexmpp, XMLStream):
 			% (self.username, self.domain, challenge["nonce"], cnonce, "xmpp/%s" % self.domain, responseHash, challenge["qop"])
 		self.sendRaw("<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>%s</response>" % base64.encodestring(response)[:-1],
 				priority=1, init=True )
-	
+
 	def handler_sasl_digest_md5_auth_fail(self, xml):
 		self.authenticated = False
 		self.handler_auth_fail(xml)
