@@ -92,7 +92,7 @@ class xep_0047(base.base_plugin):
     '''
        
     def plugin_init(self):
-        self.xep = 'xep-047'
+        self.xep = '0047'
         self.description = 'in-band file transfer'
         self.acceptTransfers = self.config.get('acceptTransfers', True)
         self.saveDirectory = self.config.get('saveDirectory', '/tmp/')
@@ -469,7 +469,7 @@ class ByteStreamSession(threading.Thread):
                     iq['to'] = self.otherPartyJid
                     iq.setPayload(dataElem)
                     self.__sendAckEvent.clear()
-                    self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=True, once=True, instream=False))
+                    self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
                     iq.send(block=False, priority=2)
                 
         self.__xmpp.event(FILE_FINISHED_SENDING, {'sid': self.sid})
@@ -485,7 +485,7 @@ class ByteStreamSession(threading.Thread):
         if xml.get('type') == 'result':
             self.__lastMessage = time.time()
             self.__sendAckEvent.set()
-        else: #some kind of error occured
+        else: #some kind of error occurred
             self.process = False
             
             
