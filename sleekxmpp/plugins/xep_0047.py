@@ -220,7 +220,7 @@ class xep_0047(base.base_plugin):
             #Check to see if the file transfer should be accepted
             acceptTransfer = False
             if self.acceptTransferCallback:
-                acceptTransfer = self.acceptTransferCallback()
+                acceptTransfer = self.acceptTransferCallback(sid=elem.get('sid'))
             else:
                 if self.acceptTransfers and len(self.streamSessions) < self.maxSessions:
                     acceptTransfer = True
@@ -229,7 +229,7 @@ class xep_0047(base.base_plugin):
             #TODO: fix this to work with non linux 
             saveFileAs = self.saveDirectory + self.saveNamePrefix + elem.get('sid')
             if self.fileNameCallback:
-                saveFileAs = self.fileNameCallback()
+                saveFileAs = self.fileNameCallback(sid=elem.get('sid'))
                 
             #Do not accept a transfer from ourselves
             if self.xmpp.fulljid == xml.get('from'):
