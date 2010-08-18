@@ -29,10 +29,12 @@ import time
 import random
 import base64
 from .. xmlstream.stanzabase import ET
-from .. xmlstream.handler.xmlcallback import XMLCallback
 from .. xmlstream.matcher.xmlmask import MatchXMLMask
 from .. xmlstream.matcher.id import MatcherId
 from .. xmlstream.handler.callback import Callback 
+from sleekxmpp.xmlstream.stanzabase import ElementBase
+from sleekxmpp.stanza.iq import Iq
+from sleekxmpp.xmlstream.matcher.xpath import MatchXPath
  
 XMLNS = 'http://jabber.org/protocol/ibb'
 STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
@@ -111,9 +113,15 @@ class xep_0047(base.base_plugin):
         #thread setup
         self.streamSessions = {} #id:thread
         self.__streamSetupLock = threading.Lock()
+        #Register the xmpp stanzas used in this plugin
+        self.xmpp.stanzaPlugin(Iq, Open)
+        self.xmpp.stanzaPlugin(Iq, Close)
+        self.xmpp.stanzaPlugin(Iq, Data)
         #add handlers to listen for incoming requests
-        self.xmpp.add_handler("<iq type='set'><open xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleIncomingTransferRequest, threaded=True)
-        self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleStreamClosed, threaded=False)
+        self.xmpp.registerHandler(Callback('xep_0047_open_stream', MatchXPath('{%s}iq/{%s}open'  %(self.xmpp.default_ns, XMLNS)), self._handleIncomingTransferRequest, thread=True))
+        self.xmpp.registerHandler(Callback('xep_0047_close_stream', MatchXPath('{%s}iq/{%s}close' %(self.xmpp.default_ns, XMLNS)), self._handleStreamClosed, thread=False))
+        #self.xmpp.add_handler("<iq type='set'><open xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleIncomingTransferRequest, threaded=True)
+        #self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleStreamClosed, threaded=False)
         #Event handler to allow session threads to call back to the main processor to remove the thread
         self.xmpp.add_event_handler(STREAM_CLOSED_EVENT, self._eventCloseStream, threaded=True, disposable=False)
         
@@ -205,54 +213,52 @@ class xep_0047(base.base_plugin):
         '''
         self.acceptTransfers = status
         
-    def _handleIncomingTransferRequest(self, xml):
+    def _handleIncomingTransferRequest(self, iq):
         logging.debug("incoming request to open file transfer stream")
-        elem = xml.find('{%s}' %XMLNS + 'open')
         with self.__streamSetupLock:
             #Check the block size
-            if(self.maxBlockSize < int(elem.get('block-size'))):
-                iq = self.xmpp.makeIqError(id=xml.get('id'), condition='resource-constraint')
-                iq['to'] = xml.get('from')
-                iq['error']['type'] = 'modify'
-                iq.send(priority=1)
+            if(self.maxBlockSize < int(iq['open']['block-size'])):
+                errIq = self.xmpp.makeIqError(id=iq['id'], condition='resource-constraint')
+                errIq['to'] = iq['from']
+                errIq['error']['type'] = 'modify'
+                errIq.send(priority=1)
                 return
             
             #Check to see if the file transfer should be accepted
             acceptTransfer = False
             if self.acceptTransferCallback:
-                acceptTransfer = self.acceptTransferCallback(sid=elem.get('sid'))
+                acceptTransfer = self.acceptTransferCallback(sid=iq['open']['sid'])
             else:
                 if self.acceptTransfers and len(self.streamSessions) < self.maxSessions:
                     acceptTransfer = True
                     
             #Ask where to save the file if the callback is present
             #TODO: fix this to work with non linux 
-            saveFileAs = self.saveDirectory + self.saveNamePrefix + elem.get('sid')
+            saveFileAs = self.saveDirectory + self.saveNamePrefix + iq['open']['sid']
             if self.fileNameCallback:
-                saveFileAs = self.fileNameCallback(sid=elem.get('sid'))
+                saveFileAs = self.fileNameCallback(sid=iq['open']['sid'])
                 
             #Do not accept a transfer from ourselves
-            if self.xmpp.fulljid == xml.get('from'):
+            if self.xmpp.fulljid == iq['from']:
                 acceptTransfer = False
             
             if acceptTransfer:
-                self.streamSessions[elem.get('sid')] = ByteStreamSession(self.xmpp, elem.get('sid'), xml.get('from'), self.transferTimeout, int(elem.get('block-size')), saveFileAs)
-                self.streamSessions[elem.get('sid')].start()
-                sendAckIQ(xmpp=self.xmpp, to=xml.get('from'), id=xml.get('id'))
+                self.streamSessions[iq['open']['sid']] = ByteStreamSession(self.xmpp, iq['open']['sid'], iq['from'], self.transferTimeout, int(iq['open']['block-size']), saveFileAs)
+                self.streamSessions[iq['open']['sid']].start()
+                sendAckIQ(xmpp=self.xmpp, to=iq['from'], id=iq['id'])
             else: #let the requesting party know we are not accepting file transfers 
-                iq = self.xmpp.makeIqError(id=xml.get('id'), condition='not-acceptable')
-                iq['to'] = xml.get('from')
-                iq['error']['type'] = 'cancel'
-                iq.send(priority=1)
+                errIq = self.xmpp.makeIqError(id=iq['id'], condition='not-acceptable')
+                errIq['to'] = iq['from']
+                errIq['error']['type'] = 'cancel'
+                errIq.send(priority=1)
         
-    def _handleStreamClosed(self, xml):
+    def _handleStreamClosed(self, iq):
         '''
         Another party wishes to close a stream
         '''
-        elem = xml.find('{%s}' %XMLNS + 'close')
-        sid = elem.get('sid')
+        sid = iq['close']['sid']
         
-        if self.streamSessions.get(sid) and self.streamSessions.get(sid).otherPartyJid.lower() == xml.get('from', '').lower():  
+        if self.streamSessions.get(sid) and self.streamSessions.get(sid).otherPartyJid.jid == iq['from'].jid:  
             with self.__streamSetupLock:
                 session = self.streamSessions.get(sid)
                 del self.streamSessions[sid]
@@ -260,12 +266,12 @@ class xep_0047(base.base_plugin):
                 session.process = False
                 session.join(5)
                 del session
-                sendAckIQ(self.xmpp, xml.get('from'), xml.get('id'))
+                sendAckIQ(self.xmpp, iq['from'], iq['id'])
         else: #We don't know about this stream, send error
-            iq = self.xmpp.makeIqError(id=xml.get('id'), condition='item-not-found')
-            iq['to'] = xml.get('from')
-            iq['error']['type'] = 'cancel'
-            iq.send(priority=1)
+            errIq = self.xmpp.makeIqError(id=iq['id'], condition='item-not-found')
+            errIq['to'] = iq['from']
+            errIq['error']['type'] = 'cancel'
+            errIq.send(priority=1)
             
     def _eventCloseStream(self, eventdata):
         '''
@@ -314,8 +320,9 @@ class ByteStreamSession(threading.Thread):
         
         self.otherPartyJid = otherPartyJid
         #register to start receiving file packets
-        self.__xmpp.registerHandler(XMLCallback('file_receiver_message_%s' %self.sid, MatchXMLMask("<message><data xmlns='%s' sid='%s' /></message>" %(XMLNS, self.sid)), self._handlePacket, False, False, False))
-        self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.sid)), self._handlePacket, False, False, False))
+        self.__xmpp.registerHandler(Callback('file_receiver_message_%s' %self.sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.sid)), self._handlePacket, thread=False))
+        #self.__xmpp.registerHandler(XMLCallback('file_receiver_message_%s' %self.sid, MatchXMLMask("<message><data xmlns='%s' sid='%s' /></message>" %(XMLNS, self.sid)), self._handlePacket, False, False, False))
+        #self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.sid)), self._handlePacket, False, False, False))
         
     def getSavedFileName(self):
         #TODO: this probably needs to be fixed up to work on OSes other than linux
@@ -370,21 +377,23 @@ class ByteStreamSession(threading.Thread):
             self.__outSeqId += 1
             return self.__outSeqId
         
-    def _handlePacket(self, xml):
+    def _handlePacket(self, iq):
         #ensure the data packet is from the other party we are conversing with
         #and the data is in the correct order
         self.__lastMessage = time.time()
-        elem = xml.find('{%s}' %XMLNS + 'data')
-        logging.debug('packet size: %s' %len(elem.text) )
+        logging.debug('data: %s' %iq['data']['data'] )
+        logging.debug('data seq: %s' %iq['data']['seq'] )
+        logging.debug(iq['from'])
+        
+        logging.debug('packet size: %s' %len(iq['data']['data']) )
         nextSeqId = self.getNextIncSeqId()
         if self.process:
-            if xml.get('from') == self.otherPartyJid and long(elem.get('seq')) == nextSeqId and len(elem.text) <= self.__blockSize:
+            if iq['from'].jid == self.otherPartyJid.jid and long(iq['data']['seq']) == nextSeqId and len(iq['data']['data']) <= self.__blockSize:
                 if self.__incFile: #write the file being sent if we have been giving somewhere to write it to
-                    self.__incFile.write(base64.decodestring(elem.text))
+                    self.__incFile.write(base64.decodestring(iq['data']['data']))
                 
                 #for IQ stanzas we must return a result
-                if 'iq' in xml.tag.lower():
-                    sendAckIQ(self.__xmpp, xml.get('from'), xml.get('id'))
+                sendAckIQ(self.__xmpp, iq['from'], iq['id'])
             else: 
                 '''
                 packet not in correct order or bad sender
@@ -393,8 +402,8 @@ class ByteStreamSession(threading.Thread):
                 possibly be an attack
                 ''' 
                 logging.warning('Bad file transfer packet received! Terminating session with %s' %self.otherPartyJid)
-                logging.error('seq #: %s expected seq: %i' %(elem.get('seq'), nextSeqId) )
-                logging.error('packet size: %s' %len(elem.text))
+                logging.error('seq #: %s expected seq: %i' %(iq['data']['seq'], nextSeqId) )
+                logging.error('packet size: %s Max Block size: %s' %(len(iq['data']['data']), self.__blockSize) )
                 self.process = False
                 self._closeStream()
                 
@@ -463,10 +472,11 @@ class ByteStreamSession(threading.Thread):
                 if self.__sendAckEvent.wait(1): 
                     data = file.read(self.__fileReadSize)
                     if data == str(''): break
+                    iq = Data()
+                    iq['type'] = 'set'
                     iq = self.__xmpp.makeIqSet()
                     dataElem = ET.Element('{%s}data' %XMLNS, sid=self.sid, seq=str(self.getNextOutSeqId()))
                     dataElem.text = base64.b64encode(data)
-                    iq['to'] = self.otherPartyJid
                     iq.setPayload(dataElem)
                     self.__sendAckEvent.clear()
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
@@ -499,7 +509,37 @@ class ByteStreamSession(threading.Thread):
                 self.streamClosed = True
                 sendCloseStream(self.__xmpp, self.otherPartyJid, self.sid)
                 self.__xmpp.event(STREAM_CLOSED_EVENT, {'sid': self.sid})
-        
+
+'''stanza objects'''
+class Open(ElementBase):
+    namespace = XMLNS
+    name = 'open'
+    plugin_attrib = 'open'
+    interfaces = set(('block-size', 'sid', 'stanza'))
+    #sub_interfaces = interfaces
+
+class Close(ElementBase):
+    namespace = XMLNS
+    name = 'close'
+    plugin_attrib = 'close'
+    interfaces = set(('sid',))
+    #sub_interfaces = interfaces
+    
+class Data(ElementBase):
+    namespace = XMLNS
+    name = 'data'
+    plugin_attrib = 'data'
+    interfaces = set(('data','sid', 'seq'))
+    
+    def getData(self):
+        return self.xml.text
+    def setData(self, data):
+        self.xml.text = data
+    def delData(self):
+        if self.parent is not None:
+            self.parent().xml.remove(self.xml)
+    
+'''Exceptions'''        
 class InBandTransferException(Exception):
     def __init__(self, *args, **kwargs):
         Exception.__init__(self, *args, **kwargs)
@@ -512,6 +552,11 @@ class NotAcceptableException(InBandTransferException):
     def __init__(self, *args, **kwargs):
         InBandTransferException.__init__(self, *args, **kwargs)
 
+
+'''
+Override of the threading.Event class to make the implementation work like 
+python 2.7
+'''
 def Event(*args, **kwargs):
     if sys.version_info < (2,7):
         return _Event(*args, **kwargs)
