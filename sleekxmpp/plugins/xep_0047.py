@@ -28,13 +28,13 @@ import threading
 import time
 import random
 import base64
-from .. xmlstream.stanzabase import ET
+from .. xmlstream.matcher.xpath import MatchXPath
 from .. xmlstream.matcher.xmlmask import MatchXMLMask
 from .. xmlstream.matcher.id import MatcherId
-from .. xmlstream.handler.callback import Callback 
-from sleekxmpp.xmlstream.stanzabase import ElementBase
-from sleekxmpp.stanza.iq import Iq
-from sleekxmpp.xmlstream.matcher.xpath import MatchXPath
+from .. xmlstream.handler.callback import Callback
+from .. xmlstream.stanzabase import ElementBase, ET
+from .. stanza.iq import Iq
+
  
 XMLNS = 'http://jabber.org/protocol/ibb'
 STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
@@ -128,7 +128,7 @@ class xep_0047(base.base_plugin):
     def post_init(self):
         self.post_inited = True
         
-    def sendFile(self, fileName, to, threaded=True):
+    def sendFile(self, fileName, to, threaded=True, xmlCallback=None):
         '''
         Sends a file to the intended receiver if the receiver is available and 
         willing to accept the transfer.  If the send is requested to be threaded 
@@ -137,6 +137,24 @@ class xep_0047(base.base_plugin):
         
         The returned sid can be used to check on the status of the transfer or 
         cancel the transfer.
+        
+        If xmlCallback is provided the function will be called before the xml is
+        sent to the other party.  This method will pass the xmlCallback the xml
+        being sent, the fileName and the to party.  The method should return the
+        xml to be sent as an Element.  This allows the caller to add any non 
+        standard elements to the open xml stanza.  ie:
+            
+            def addFilenameCallback(xml, filename, to): 
+                filename = filename[filename.rfind('/') + 1:]
+                optionalElem = ElementTree.Element('optional', filename=filename)
+                elem = xml.find('{%s}open' %xep_0047.XMLNS)
+                elem.append(optionalElem)
+            
+            .....somewhere else in the code.....
+            sid = xmpp[xep_0047].sendFile('file.txt', 
+                                          'user@domain.com', 
+                                          threaded=True, 
+                                          xmlCallback=self.addFilenameCallback)
         
         Error Conditions:
         -IOError will be raised if the file to be sent is not found
@@ -169,6 +187,9 @@ class xep_0047(base.base_plugin):
             openElem = ET.Element('{%s}open' %XMLNS, sid=sid, stanza=self.stanzaType)
             openElem.set('block-size', str(self.prefBlockSize))
             iq.setPayload(openElem)
+            #Run the xmlCallback if present
+            if xmlCallback:
+                iq.xml = xmlCallback(iq.xml, fileName, to)
             result = iq.send(block=True, timeout=10, priority=1)
             
             if result.get('type') == 'error': 
@@ -227,7 +248,7 @@ class xep_0047(base.base_plugin):
             #Check to see if the file transfer should be accepted
             acceptTransfer = False
             if self.acceptTransferCallback:
-                acceptTransfer = self.acceptTransferCallback(sid=iq['open']['sid'])
+                acceptTransfer = self.acceptTransferCallback(iq.xml)
             else:
                 if self.acceptTransfers and len(self.streamSessions) < self.maxSessions:
                     acceptTransfer = True
@@ -236,7 +257,7 @@ class xep_0047(base.base_plugin):
             #TODO: fix this to work with non linux 
             saveFileAs = self.saveDirectory + self.saveNamePrefix + iq['open']['sid']
             if self.fileNameCallback:
-                saveFileAs = self.fileNameCallback(sid=iq['open']['sid'])
+                saveFileAs = self.fileNameCallback(iq.xml)
                 
             #Do not accept a transfer from ourselves
             if self.xmpp.fulljid == iq['from']:
@@ -320,7 +341,7 @@ class ByteStreamSession(threading.Thread):
         
         self.otherPartyJid = otherPartyJid
         #register to start receiving file packets
-        self.__xmpp.registerHandler(Callback('file_receiver_message_%s' %self.sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.sid)), self._handlePacket, thread=False))
+        self.__xmpp.registerHandler(Callback('file_receiver_iq_%s' %self.sid, MatchXMLMask("<iq type='set'><data xmlns='http://jabber.org/protocol/ibb' sid='%s' /></iq>" %self.sid), self._handlePacket, thread=False))
         #self.__xmpp.registerHandler(XMLCallback('file_receiver_message_%s' %self.sid, MatchXMLMask("<message><data xmlns='%s' sid='%s' /></message>" %(XMLNS, self.sid)), self._handlePacket, False, False, False))
         #self.__xmpp.registerHandler(XMLCallback('file_receiver_iq_%s' %self.sid, MatchXMLMask("<iq type='set'><data xmlns='%s' sid='%s' /></iq>" %(XMLNS, self.sid)), self._handlePacket, False, False, False))
         
@@ -354,7 +375,6 @@ class ByteStreamSession(threading.Thread):
         
         logging.debug("end of stream. remove data handlers")
         #remove the file handlers, stream has ended
-        self.__xmpp.removeHandler('file_receiver_message_%s' %self.sid)
         self.__xmpp.removeHandler('file_receiver_iq_%s' %self.sid)
         
         if self.__sendThread:
@@ -472,11 +492,10 @@ class ByteStreamSession(threading.Thread):
                 if self.__sendAckEvent.wait(1): 
                     data = file.read(self.__fileReadSize)
                     if data == str(''): break
-                    iq = Data()
-                    iq['type'] = 'set'
                     iq = self.__xmpp.makeIqSet()
                     dataElem = ET.Element('{%s}data' %XMLNS, sid=self.sid, seq=str(self.getNextOutSeqId()))
                     dataElem.text = base64.b64encode(data)
+                    iq['to'] = self.otherPartyJid
                     iq.setPayload(dataElem)
                     self.__sendAckEvent.clear()
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
