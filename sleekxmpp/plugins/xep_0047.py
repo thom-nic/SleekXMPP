@@ -145,10 +145,12 @@ class xep_0047(base.base_plugin):
         standard elements to the open xml stanza.  ie:
             
             def addFilenameCallback(xml, filename, to): 
+                filesize = str(os.path.getsize(filename))
                 filename = filename[filename.rfind('/') + 1:]
-                optionalElem = ElementTree.Element('optional', filename=filename)
+                optionalElem = ElementTree.Element('optional', filename=filename, size=filesize)
                 elem = xml.find('{%s}open' %xep_0047.XMLNS)
                 elem.append(optionalElem)
+                return xml
             
             .....somewhere else in the code.....
             sid = xmpp[xep_0047].sendFile('file.txt', 
@@ -264,6 +266,7 @@ class xep_0047(base.base_plugin):
                 acceptTransfer = False
             
             if acceptTransfer:
+                logging.debug('saving file as: %s' %saveFileAs)
                 self.streamSessions[iq['open']['sid']] = ByteStreamSession(self.xmpp, iq['open']['sid'], iq['from'], self.transferTimeout, int(iq['open']['block-size']), saveFileAs)
                 self.streamSessions[iq['open']['sid']].start()
                 sendAckIQ(xmpp=self.xmpp, to=iq['from'], id=iq['id'])
