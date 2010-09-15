@@ -28,6 +28,7 @@ import threading
 import time
 import random
 import base64
+import xep_0096
 from .. xmlstream.matcher.xpath import MatchXPath
 from .. xmlstream.matcher.xmlmask import MatchXMLMask
 from .. xmlstream.matcher.id import MatcherId
@@ -38,8 +39,6 @@ from .. stanza.iq import Iq
  
 XMLNS = 'http://jabber.org/protocol/ibb'
 STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
-FILE_FINISHED_SENDING = 'BYTE_STREAM_SENDING_COMPLETE'
-FILE_FINISHED_RECEIVING = 'BYTE_STREAM_RECEIVING_COMPLETE'
 
 def sendAckIQ(xmpp, to, id):
     iq = xmpp.makeIqResult(id=id)
@@ -53,15 +52,8 @@ def sendCloseStream(xmpp, to, sid):
     iq.setPayload(close)
     iq.send(priority=1)
     
-    
-def generateSid():
-    sid = ''
-    for i in range(7):
-        sid+=hex(int(random.random()*65536*4096))[2:]
-    return sid[:8].upper()
 
-
-class xep_0047(base.base_plugin):
+class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
     '''
     In-band file transfer for xmpp.
     
@@ -109,7 +101,6 @@ class xep_0047(base.base_plugin):
         self.acceptTransferCallback = self.config.get('acceptTransferCallback')
         self.fileNameCallback = self.config.get('fileNameCallback')
         
-        
         #thread setup
         self.streamSessions = {} #id:thread
         self.__streamSetupLock = threading.Lock()
@@ -126,9 +117,22 @@ class xep_0047(base.base_plugin):
         self.xmpp.add_event_handler(STREAM_CLOSED_EVENT, self._eventCloseStream, threaded=True, disposable=False)
         
     def post_init(self):
-        self.post_inited = True
+        '''
+        If xep_0096 is loaded it MUST be used for bytestream transfer.  If
+        xep_0096 is present in the system all callbacks and events will default
+        to there, overwriting anything that may have been passed in during plugin
+        config.
         
-    def sendFile(self, fileName, to, threaded=True, xmlCallback=None):
+        If you want to use xep_0047 stand alone do not load xep_0047
+        '''
+        self.post_inited = True
+        #Register feature with xep_0096
+        if self.xmpp.plugin.get('xep_0096'):
+            self.xmpp.plugin['xep_0096'].add_feature(XMLNS, self)
+            self.acceptTransferCallback = self.xmpp.plugin['xep_0096'].protocolGetAcceptTransferRequest 
+            self.fileNameCallback = self.xmpp.plugin['xep_0096'].protocolGetFilename
+        
+    def sendFile(self, fileName, to, threaded=True, sid=None):
         '''
         Sends a file to the intended receiver if the receiver is available and 
         willing to accept the transfer.  If the send is requested to be threaded 
@@ -137,26 +141,6 @@ class xep_0047(base.base_plugin):
         
         The returned sid can be used to check on the status of the transfer or 
         cancel the transfer.
-        
-        If xmlCallback is provided the function will be called before the xml is
-        sent to the other party.  This method will pass the xmlCallback the xml
-        being sent, the fileName and the to party.  The method should return the
-        xml to be sent as an Element.  This allows the caller to add any non 
-        standard elements to the open xml stanza.  ie:
-            
-            def addFilenameCallback(xml, filename, to): 
-                filesize = str(os.path.getsize(filename))
-                filename = filename[filename.rfind('/') + 1:]
-                optionalElem = ElementTree.Element('optional', filename=filename, size=filesize)
-                elem = xml.find('{%s}open' %xep_0047.XMLNS)
-                elem.append(optionalElem)
-                return xml
-            
-            .....somewhere else in the code.....
-            sid = xmpp[xep_0047].sendFile('file.txt', 
-                                          'user@domain.com', 
-                                          threaded=True, 
-                                          xmlCallback=self.addFilenameCallback)
         
         Error Conditions:
         -IOError will be raised if the file to be sent is not found
@@ -183,15 +167,13 @@ class xep_0047(base.base_plugin):
             if not self.xmpp.state.ensure('connected'):
                 raise Exception('Not connected to a server!')
             
-            sid = generateSid()
+            if sid is None:
+                sid = xep_0096.generateSid()
             iq = self.xmpp.makeIqSet()
             iq['to'] = to
             openElem = ET.Element('{%s}open' %XMLNS, sid=sid, stanza=self.stanzaType)
             openElem.set('block-size', str(self.prefBlockSize))
             iq.setPayload(openElem)
-            #Run the xmlCallback if present
-            if xmlCallback:
-                iq.xml = xmlCallback(iq.xml, fileName, to)
             result = iq.send(block=True, timeout=10, priority=1)
             
             if result.get('type') == 'error': 
@@ -218,7 +200,14 @@ class xep_0047(base.base_plugin):
             return session.getStatus()
         else:
             return None
-    
+        
+    def getSessionStatusAll(self):
+        dict = {}
+        for session in self.streamSessions.values():
+            dict[session.sid] = session.getStatus()
+        
+        return dict
+        
     def cancelSend(self, sid):
         '''
         cancels an outgoing file transfer.
@@ -250,7 +239,7 @@ class xep_0047(base.base_plugin):
             #Check to see if the file transfer should be accepted
             acceptTransfer = False
             if self.acceptTransferCallback:
-                acceptTransfer = self.acceptTransferCallback(iq.xml)
+                acceptTransfer = self.acceptTransferCallback(sid=iq['open']['sid'])
             else:
                 if self.acceptTransfers and len(self.streamSessions) < self.maxSessions:
                     acceptTransfer = True
@@ -259,7 +248,7 @@ class xep_0047(base.base_plugin):
             #TODO: fix this to work with non linux 
             saveFileAs = self.saveDirectory + self.saveNamePrefix + iq['open']['sid']
             if self.fileNameCallback:
-                saveFileAs = self.fileNameCallback(iq.xml)
+                saveFileAs = self.fileNameCallback(sid=iq['open']['sid'])
                 
             #Do not accept a transfer from ourselves
             if self.xmpp.fulljid == iq['from']:
@@ -284,8 +273,7 @@ class xep_0047(base.base_plugin):
         
         if self.streamSessions.get(sid) and self.streamSessions.get(sid).otherPartyJid.jid == iq['from'].jid:  
             with self.__streamSetupLock:
-                session = self.streamSessions.get(sid)
-                del self.streamSessions[sid]
+                session = self.streamSessions.pop(sid)
                 session.streamClosed = True
                 session.process = False
                 session.join(5)
@@ -386,7 +374,7 @@ class ByteStreamSession(threading.Thread):
         
         #close the file hander 
         if self.__incFile:
-            self.__xmpp.event(FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
+            self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
             self.__incFile.close()
         logging.debug("finished processing packets")
         
@@ -504,7 +492,7 @@ class ByteStreamSession(threading.Thread):
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
                     iq.send(block=False, priority=2)
                 
-        self.__xmpp.event(FILE_FINISHED_SENDING, {'sid': self.sid})
+        self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': self.sid})
         self._closeStream()
         self.process = False
         
