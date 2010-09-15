@@ -33,7 +33,7 @@ from .. xmlstream.matcher.xpath import MatchXPath
 from .. xmlstream.matcher.xmlmask import MatchXMLMask
 from .. xmlstream.matcher.id import MatcherId
 from .. xmlstream.handler.callback import Callback
-from .. xmlstream.stanzabase import ElementBase, ET
+from .. xmlstream.stanzabase import ElementBase, ET, JID
 from .. stanza.iq import Iq
 
  
@@ -184,7 +184,7 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
                 else:
                     raise Exception('Unknown error! %s' %result)
             
-            self.streamSessions[sid] = ByteStreamSession(self.xmpp, sid, to, self.transferTimeout, self.prefBlockSize)
+            self.streamSessions[sid] = ByteStreamSession(self.xmpp, sid, JID(to), self.transferTimeout, self.prefBlockSize)
             
         self.streamSessions[sid].start()
         self.streamSessions[sid].sendFile(fileName, threaded)
@@ -271,6 +271,7 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
         '''
         sid = iq['close']['sid']
         
+        from_ = iq['from'].jid
         if self.streamSessions.get(sid) and self.streamSessions.get(sid).otherPartyJid.jid == iq['from'].jid:  
             with self.__streamSetupLock:
                 session = self.streamSessions.pop(sid)
