@@ -9,7 +9,8 @@ from xml.etree.cElementTree import XML, tostring
 from tests.sleektest import TestSocket
 from sleekxmpp import ClientXMPP
 import sleekxmpp.plugins.xep_0096
-from sleekxmpp.plugins import xep_0096, xep_0047
+from sleekxmpp.plugins import xep_0096
+from sleekxmpp.plugins.xep_0047 import xep_0047
 import time
 
 class test_xep_0096(unittest.TestCase):
