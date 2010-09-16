@@ -219,9 +219,10 @@ class XMLStream(object):
 	
 	def _process(self):
 		"Start processing the socket."
-		logging.debug('Process thread starting...')
 		while not self.quit.is_set():
+			logging.debug('Process thread is waiting for connected state...')
 			if not self.state.ensure('connected',wait=2, block_on_transition=True): continue
+			logging.debug('Process thread is running.')
 			try:
 				self.sendRaw(self.stream_header, priority=0, init=True)
 				self.__readXML() # this loops until the stream is terminated.
@@ -231,7 +232,7 @@ class XMLStream(object):
 				logging.warn('socket rcv timeout')
 			except RestartStream:
 				logging.debug("Restarting stream...")
-				continue # DON'T re-initialize the stream -- this exception is sent 
+				continue # DON'T re-initialize the socket -- this exception is sent 
 				# specifically when we've initialized TLS and need to re-send the <stream> header.
 			except (KeyboardInterrupt, SystemExit):
 				logging.debug("System interrupt detected")
