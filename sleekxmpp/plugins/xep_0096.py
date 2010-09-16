@@ -324,7 +324,7 @@ class xep_0096(base.base_plugin):
         iq = makeStreamOfferIQ(self.xmpp.makeIqSet(), 
                                to, 
                                sid, 
-                               self.bytestreamProtocols.keys(), 
+                               self.bytestreamProtocols.keys() if protocolNS is None else protocolNS, 
                                fileName[fileName.rfind('/') + 1:], 
                                os.path.getsize(fileName),
                                fileHash=md5.hexdigest())
