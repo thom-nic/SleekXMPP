@@ -162,7 +162,7 @@ class xep_0096(base.base_plugin):
         
         self.bytestreamProtocols = {}
         self.activeBytestreams = {}
-        self.preferredProtocolNS = self.config.get('preferredProtocolNS', None)
+        self.preferredProtocolNS = self.config.get('preferredProtocolNS')
         
         self.acceptTransfers = True
         self.saveDirectory = self.config.get('saveDirectory', '/tmp/')
@@ -201,7 +201,7 @@ class xep_0096(base.base_plugin):
         
         protocolNS - string - the xml namespace of the preferred protocol
         '''
-        if self.bytestreamProtocols.get(protocolNS, None):
+        if self.bytestreamProtocols.get(protocolNS):
             self.preferredProtocolNS = protocolNS
         else:
             raise Exception('Unknown protocol namespace: %s' %protocolNS)
@@ -281,12 +281,12 @@ class xep_0096(base.base_plugin):
         returnIQ.send(priority=2, block=False)   
         
     def _receiveCompleteHandler(self, dict):
-        xferInfo = self.activeBytestreams.pop(dict['sid'], None)
+        xferInfo = self.activeBytestreams.pop(dict['sid'])
         if self.closeTransferCallback:
             self.closeTransferCallback(xferInfo)
         
     def _sendCompleteHandler(self, dict):
-        xferInfo = self.activeBytestreams.pop(dict['sid'], None)
+        xferInfo = self.activeBytestreams.pop(dict['sid'])
         if self.closeTransferCallback:
             self.closeTransferCallback(xferInfo)
     
@@ -309,7 +309,7 @@ class xep_0096(base.base_plugin):
         if not os.path.isfile(fileName):
             raise IOError('file: %s not found' %fileName)
         
-        if protocolNS is not None and self.bytestreamProtocols.get(protocolNS, None) is None:
+        if protocolNS is not None and self.bytestreamProtocols.get(protocolNS) is None:
             raise Exception('''protocol %s is not a registered protocol with xep_0096\n
                             please use one of the following - %s''' %(protocolNS, self.bytestreamProtocols.keys()))
         

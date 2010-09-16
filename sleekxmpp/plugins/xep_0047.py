@@ -109,7 +109,7 @@ class xep_0047(xep_0096.FileTransferProtocol):
         
     def post_init(self):
         xep_0096.FileTransferProtocol.post_init(self)
-        if self.xmpp.plugin['xep_0030']:
+        if self.xmpp.plugin.get('xep_0030'):
             self.xmpp.plugin['xep_0030'].add_feature(xep_0047.XMLNS)
         
     def sendFile(self, fileName, to, threaded=True, sid=None):
