@@ -25,12 +25,87 @@ def generateSid():
         sid+=hex(int(random.random()*65536*4096))[2:]
     return sid[:8].upper()
 
-class FileTransferProtocol(object):
+class FileTransferProtocol(base.base_plugin):
+    '''
+    This is a base class that must be implemented by any xep that provides
+    bytestream transfer for xepp.  Examples of this are XEP-0047 and XEP-0066.
+    
+    This class provides the minimum interfaces needed to support bytestreams
+    in conjunction with xep-0096.  If an implementation of this interface should
+    call it's super classes method if there is already an implementation provided.
+    
+    Interfaces that should be implemented:
+        sendFile(self, fileName, to, threaded=True, sid=None):
+            This is the method to send a file.  It should provided a blocking and
+            a non-blocking option
+            
+        getSessionStatus(self, sid):
+            This method should return a dict with the current status of the 
+            bytestream for a given sid.  
+            
+            @return format:
+            {'sid': string, 'processing' : boolean, 'otherPartyJID' : string,
+             'streamClosed' : boolean, 'lastMessageTimestamp' : long, 
+             'incFileName' <optional> : string, incFileKBytes <optional> : long,
+             'outFileKbytes' <optional> : long}
+             
+        getSessionStatusAll(self):
+            Should return a list of getSessionStatus for all bytestreams currently
+            being transfered by the plugin.
+            
+        cancelSend(self, sid):
+            Should cancel the bytestream for a given sid.  Once the stream has
+            been terminated and everything cleaned up, xep_0096 should be notified
+            that the transfer has ended by calling either fileFinishedReceiving 
+            or fileFinishedSending
+            
+        
+    The following methods already have an implementation provided.  If a protocol
+    implementation needs to override any of these methods, the overriding method 
+    must call the super implmentation.
+    
+        post_init(self):
+            Provides registration with xep_0096 to add the bytestream protocol 
+            as an available feature for file transfer
+            
+        fileFinishedReceiving(self, sid, filename):
+            fires the an event that signals that a file has finished sending. The
+            fired event comes with a dict that contains the sid of the bytestream
+            as well as the filename.
+    
+        fileFinishedSending(self, sid):
+            fires an event that signals that a file has finished receiving.  The
+            fired event comes with a dict that contains the sid of the bytestream.
+        
+    There are also 2 events that users of this plugin can register to receive notifications:
+    FILE_FINISHED_SENDING     - This event is fired after a file send has completed
+    FILE_FINISHED_RECEIVING   - This event is fired after an incoming file transfer has completed.
+    
+    !!!!!!!!!!!When registering to receive notifications about these events the
+    callback functions should be registered as threaded!!!!!!!!!
+    '''
+    
     FILE_FINISHED_SENDING = 'BYTE_STREAM_SENDING_COMPLETE'
     FILE_FINISHED_RECEIVING = 'BYTE_STREAM_RECEIVING_COMPLETE'
     
     XMLNS = '' #MUST be overwritten by the implementer to be the namespace for
                #the implementing protocol
+    
+    def post_init(self):
+        '''
+        If xep_0096 is loaded it MUST be used for bytestream transfer.  If
+        xep_0096 is present in the system all callbacks and events will default
+        to there, overwriting anything that may have been passed in during plugin
+        config.
+        
+        If you want to use a bytestream protocol stand alone do not load xep_0096
+        '''
+        self.post_inited = True
+        #Register feature with xep_0096
+        if self.xmpp.plugin.get('xep_0096'):
+            self.xmpp.plugin['xep_0096'].add_feature(self.XMLNS, self)
+            self.acceptTransferCallback = self.xmpp.plugin['xep_0096'].protocolGetAcceptTransferRequest 
+            self.fileNameCallback = self.xmpp.plugin['xep_0096'].protocolGetFilename
     
     def sendFile(self, fileName, to, threaded=True, sid=None):
         pass
@@ -44,31 +119,42 @@ class FileTransferProtocol(object):
     def cancelSend(self, sid): 
         pass
     
-    def acceptTransfer(self, txInfo):
-        pass
-    
     def fileFinishedReceiving(self, sid, filename):
         self.xmpp.event(FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': sid, 'filename':filename})
     
     def fileFinishedSending(self, sid):
         self.xmpp.event(FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': sid})        
-        
-    '''
-    Upon receipt of a file the following event should be created:
-    xmpp.event(FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
-    '''
     
     
 class xep_0096(base.base_plugin):
     '''
+    Implements initiation for bytestreams for xmpp.
     
-    openTransfer(dict) where {'sid', 'name', 'size', 'hash', 'protocolNS'}
+    This plugin is to be used in conjuction with the actual protocols for 
+    bytestreams such as XEP-0066 OR XEP-0047.  This plugin does not actually
+    implement a bytestream transfer protocol, just the ability to set one up. 
     
-    acceptTransfer(dict) where dict is {'sid', 'name', 'size', 'hash', 'protocolNS'}
+    Any implementing protocols that wish to interface with SI (stream initiation)
+    must implement the interface FileTransferProtocol.
     
-    closeTransfer(dict) where {'sid', 'name', 'size', 'hash', 'protocolNS', 'savedPath'}
-        #TODO is error needed?
-        
+    Plugin configuration options:
+    preferredProtocolNS    - String      - The preferred file transfer protocol NS (ie for XEP-0047: http://jabber.org/protocol/ibb)
+    acceptTransfers        - Boolean     - Sets the plugin to either accept or deny transfers
+    saveDirectory          - String      - The default directory that incoming file transfers will be saved in
+    saveNamePrefix         - String      - Prefix that will be prepended to the saved file name of an incoming transfer
+    overwriteFile          - Boolean     - If an incoming file transfer should overwrite a file if that file already exists
+    stanzaType             - String      - Either IQ or message,  Currently only iq is supported
+    maxSessions            - integer     - The max number of send/receive sessions that may run concurrently
+    acceptTransferCallback - Function ptr- This should be a function pointer that will return a boolean value letting the caller know if a 
+                                           file transfer should or should not be accepted. The callback method will be passed the SI xml 
+                                           the requestor sent to negotiate the stream.
+    fileNameCallback       - function ptr- This should be a function pointer that will return a string with the full path and name a file should be saved as.  
+                                           If the provided function pointer returns None or is not provided the default saveDirectory + saveNamePrefix_sid will be used.
+                                           The callback method will be passed the SI xml the requestor sent to negotiate the stream.
+    closeTransferCallback  - function ptr- This should be a function pointer that does not need to return anything.  This is used to notify
+                                           an interested party that a file transfer has completed.  The callback function should take 1 argument
+                                           that is a dict of information about the file transfer.  For more infomation on what is in this dictionay
+                                           see the doc for xep_0096.parseRequestXMLToDict
     '''
     def plugin_init(self):
         self.xep = '0096'
@@ -109,6 +195,12 @@ class xep_0096(base.base_plugin):
         self.bytestreamProtocols[namespace] = {'protocol' : protocol, 'rangeSupport' : rangeSupport}
         
     def setPreferredProtocol(self, protocolNS):
+        '''
+        Set the preferred bytestream protocol.  Whenever a stream is attempted
+        to start the plugin will always try to use this protocol first.
+        
+        protocolNS - string - the xml namespace of the preferred protocol
+        '''
         if self.bytestreamProtocols.get(protocolNS, None):
             self.preferredProtocolNS = protocolNS
         else:
@@ -139,6 +231,10 @@ class xep_0096(base.base_plugin):
         
     
     def _handleIncomingTransferRequest(self, xml):
+        '''
+        Handles the negotiation of an incoming file transfer request.  
+        
+        '''
         logging.debug("incoming file transfer request: %s" %tostring(xml))
         
         xferInfo = parseRequestXMLToDict(xml)
@@ -157,7 +253,6 @@ class xep_0096(base.base_plugin):
             returnIQ = makeRejectStreamIQ(self.xmpp.makeIqError(xml.get('id')), xml.get('to'))
         
         #check that the requested protocol is a feature available for use
-        #s1 = set([x for x in self.bytestreamProtocols.iterkeys()])
         matchingProtocols = set(self.bytestreamProtocols.keys()).intersection(xferInfo['protocols'])
         if len(matchingProtocols) == 0 and returnIQ is None:
             returnIQ = makeNoValidStreamsIQ(self.xmpp.makeIqError(xml.get('id')), xml.get('to'))
@@ -165,7 +260,7 @@ class xep_0096(base.base_plugin):
             
         #None of the error conditions is true, we can accept the transfer
         if returnIQ is None:
-            logging.debug('transfer accepted, sending ')
+            logging.debug('transfer accepted, for sid: %s' %xferInfo['sid'])
             #get the full filename and save path
             self.activeBytestreams[xferInfo['sid']] = xferInfo
             filenameAndPath = self.saveDirectory + self.saveNamePrefix + xferInfo['filename']
@@ -195,11 +290,29 @@ class xep_0096(base.base_plugin):
         if self.closeTransferCallback:
             self.closeTransferCallback(xferInfo)
     
-    def sendFile(self, fileName, to, threaded=True):
+    def sendFile(self, fileName, to, threaded=True, protocolNS=None):
+        '''
+        Sends a file to the intended receiver if the receiver is available and 
+        willing to accept the transfer.  If the send is requested to be threaded 
+        the session sid will be returned, otherwise the method will block until 
+        the file has been sent and the session closed.
+        
+        The returned sid can be used to check on the status of the transfer or 
+        cancel the transfer.
+        
+        If protocolNS is passed in a request for stream initiation will be sent 
+        using only this protocol namespace (assuming that the protocol is registered 
+        as a feature for this plugin)
+        '''
         logging.debug('sending file...')
         #verify the file exists
         if not os.path.isfile(fileName):
             raise IOError('file: %s not found' %fileName)
+        
+        if protocolNS is not None and self.bytestreamProtocols.get(protocolNS, None) is None:
+            raise Exception('''protocol %s is not a registered protocol with xep_0096\n
+                            please use one of the following - %s''' %(protocolNS, self.bytestreamProtocols.keys()))
+        
         
         sid = generateSid()
         md5 = hashlib.md5()
@@ -236,18 +349,41 @@ class xep_0096(base.base_plugin):
         return sid
         
     def getSessionStatus(self, sid):
+        '''
+        returns the status of a bytestream for a given sid.
+        '''
         return self.activeBytestreams[sid]['selectedProtocol'].getSessionStatus(sid)
         
     def getSessionStatusAll(self):
+        '''
+        returns the status for all currently active bytestreams
+        '''
         sessions = {}
         for protocol in self.bytestreamProtocols.values():
             sessions.update(protocol['protocol'].getSessionStatusAll())
         return sessions
     
     def cancelSend(self, sid):
+        '''
+        Cancel a bytestream for a given sid
+        '''
         self.activeBytestreams[sid]['selectedProtocol'].cancelSend(sid)
     
 def parseRequestXMLToDict(xml):
+    '''
+    The xferInfo returned from this function may contain the following information:
+        otherParty       - the full JID of the other party involved in the bytestream
+        sid              - the unique id of the stream.
+        filename         - name of file 
+        filesize         - size in Kb of the file
+        filehash         - the md5 sum of the file
+        filedate         - the datestam on the file
+        protocols        - a list of strings of bytestream protocols that may be used
+        starttime        - timestamp of the time the request was made
+        filenameAndPath  - the fully qualified path + name of the saved file
+        selectedProtocol - the protocol that was selected to transfer the file.  This is a pointer to the actual implementation plugin object
+        
+    '''
     #Get the info on the request parse the inportant info in to a dict
     xferInfo = {}
     xferInfo['otherParty'] = xml.get('from')

@@ -21,12 +21,10 @@ THE SOFTWARE.
 """
 
 from __future__ import division, with_statement, unicode_literals
-from . import base
 import os, sys
 import logging
 import threading
 import time
-import random
 import base64
 import xep_0096
 from .. xmlstream.matcher.xpath import MatchXPath
@@ -36,8 +34,6 @@ from .. xmlstream.handler.callback import Callback
 from .. xmlstream.stanzabase import ElementBase, ET, JID
 from .. stanza.iq import Iq
 
- 
-XMLNS = 'http://jabber.org/protocol/ibb'
 STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
 
 def sendAckIQ(xmpp, to, id):
@@ -46,14 +42,14 @@ def sendAckIQ(xmpp, to, id):
     iq.send(priority=1)
     
 def sendCloseStream(xmpp, to, sid):
-    close = ET.Element('{%s}close' %XMLNS, sid=sid)
+    close = ET.Element('{%s}close' %xep_0047.XMLNS, sid=sid)
     iq = xmpp.makeIqSet()
     iq['to'] = to
     iq.setPayload(close)
     iq.send(priority=1)
     
 
-class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
+class xep_0047(xep_0096.FileTransferProtocol):
     '''
     In-band file transfer for xmpp.
     
@@ -73,17 +69,12 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
     maxBlockSize           - integer     - Largest block size that a stream session should accept (limited by xmpp server)
     prefBlockSize          - integer     - The preferred block size for file transfer
     acceptTransferCallback - function ptr- This should be a function pointer that will return a boolean value letting the caller know if a 
-                                           file transfer should or should not be accepted.  If this option is provided the maxSessions option is ignored.
+                                           file transfer should or should not be accepted.  
     fileNameCallback       - function ptr- This should be a function pointer that will return a string with the full path and name a file should be saved as.  
                                            If the provided function pointer returns None or is not provided the default saveDirectory + saveNamePrefix_sid will be used.
-                                           
-    There are also 2 events that users of this plugin can register to receive notifications:
-    FILE_FINISHED_SENDING     - This event is fired after a file send has completed
-    FILE_FINISHED_RECEIVING   - This event is fired after an incoming file transfer has completed.
     
-    !!!!!!!!!!!When registering to receive notifications about these events the
-    callback functions should be registered as threaded!!!!!!!!!
     '''
+    XMLNS = 'http://jabber.org/protocol/ibb'
        
     def plugin_init(self):
         self.xep = '0047'
@@ -109,28 +100,17 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
         self.xmpp.stanzaPlugin(Iq, Close)
         self.xmpp.stanzaPlugin(Iq, Data)
         #add handlers to listen for incoming requests
-        self.xmpp.registerHandler(Callback('xep_0047_open_stream', MatchXPath('{%s}iq/{%s}open'  %(self.xmpp.default_ns, XMLNS)), self._handleIncomingTransferRequest, thread=True))
-        self.xmpp.registerHandler(Callback('xep_0047_close_stream', MatchXPath('{%s}iq/{%s}close' %(self.xmpp.default_ns, XMLNS)), self._handleStreamClosed, thread=False))
+        self.xmpp.registerHandler(Callback('xep_0047_open_stream', MatchXPath('{%s}iq/{%s}open'  %(self.xmpp.default_ns, xep_0047.XMLNS)), self._handleIncomingTransferRequest, thread=True))
+        self.xmpp.registerHandler(Callback('xep_0047_close_stream', MatchXPath('{%s}iq/{%s}close' %(self.xmpp.default_ns, xep_0047.XMLNS)), self._handleStreamClosed, thread=False))
         #self.xmpp.add_handler("<iq type='set'><open xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleIncomingTransferRequest, threaded=True)
         #self.xmpp.add_handler("<iq type='set'><close xmlns='http://jabber.org/protocol/ibb' /></iq>", self._handleStreamClosed, threaded=False)
         #Event handler to allow session threads to call back to the main processor to remove the thread
         self.xmpp.add_event_handler(STREAM_CLOSED_EVENT, self._eventCloseStream, threaded=True, disposable=False)
         
     def post_init(self):
-        '''
-        If xep_0096 is loaded it MUST be used for bytestream transfer.  If
-        xep_0096 is present in the system all callbacks and events will default
-        to there, overwriting anything that may have been passed in during plugin
-        config.
-        
-        If you want to use xep_0047 stand alone do not load xep_0047
-        '''
-        self.post_inited = True
-        #Register feature with xep_0096
-        if self.xmpp.plugin.get('xep_0096'):
-            self.xmpp.plugin['xep_0096'].add_feature(XMLNS, self)
-            self.acceptTransferCallback = self.xmpp.plugin['xep_0096'].protocolGetAcceptTransferRequest 
-            self.fileNameCallback = self.xmpp.plugin['xep_0096'].protocolGetFilename
+        xep_0096.FileTransferProtocol.post_init(self)
+        if self.xmpp.plugin['xep_0030']:
+            self.xmpp.plugin['xep_0030'].add_feature(xep_0047.XMLNS)
         
     def sendFile(self, fileName, to, threaded=True, sid=None):
         '''
@@ -171,7 +151,7 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
                 sid = xep_0096.generateSid()
             iq = self.xmpp.makeIqSet()
             iq['to'] = to
-            openElem = ET.Element('{%s}open' %XMLNS, sid=sid, stanza=self.stanzaType)
+            openElem = ET.Element('{%s}open' %xep_0047.XMLNS, sid=sid, stanza=self.stanzaType)
             openElem.set('block-size', str(self.prefBlockSize))
             iq.setPayload(openElem)
             result = iq.send(block=True, timeout=10, priority=1)
@@ -184,7 +164,7 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
                 else:
                     raise Exception('Unknown error! %s' %result)
             
-            self.streamSessions[sid] = ByteStreamSession(self.xmpp, sid, JID(to), self.transferTimeout, self.prefBlockSize)
+            self.streamSessions[sid] = ByteStreamSession(self.xmpp, sid, JID(to), self.transferTimeout, self.prefBlockSize, self)
             
         self.streamSessions[sid].start()
         self.streamSessions[sid].sendFile(fileName, threaded)
@@ -256,7 +236,7 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
             
             if acceptTransfer:
                 logging.debug('saving file as: %s' %saveFileAs)
-                self.streamSessions[iq['open']['sid']] = ByteStreamSession(self.xmpp, iq['open']['sid'], iq['from'], self.transferTimeout, int(iq['open']['block-size']), saveFileAs)
+                self.streamSessions[iq['open']['sid']] = ByteStreamSession(self.xmpp, iq['open']['sid'], iq['from'], self.transferTimeout, int(iq['open']['block-size']), self, saveFileAs)
                 self.streamSessions[iq['open']['sid']].start()
                 sendAckIQ(xmpp=self.xmpp, to=iq['from'], id=iq['id'])
             else: #let the requesting party know we are not accepting file transfers 
@@ -301,7 +281,7 @@ class xep_0047(base.base_plugin, xep_0096.FileTransferProtocol):
         
 class ByteStreamSession(threading.Thread):
     
-    def __init__(self, xmpp, sid, otherPartyJid, timeout,  blockSize, recFileName = None):
+    def __init__(self, xmpp, sid, otherPartyJid, timeout,  blockSize, plugin, recFileName = None):
         threading.Thread.__init__(self, name='bytestream_session_%s' %sid)
         #When we start the session the stream will already be open
         #and we will want to process the I/O
@@ -309,6 +289,7 @@ class ByteStreamSession(threading.Thread):
         self.streamClosed = False
         
         self.__xmpp = xmpp
+        self.__plugin = plugin
         self.__incSeqId = -1
         self.__outSeqId = -1
         self.__incSeqLock = threading.Lock()
@@ -375,7 +356,8 @@ class ByteStreamSession(threading.Thread):
         
         #close the file hander 
         if self.__incFile:
-            self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
+            #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
+            self.__plugin.fileFinishedReceiving(sid=self.sid, filename=self.getSavedFileName())
             self.__incFile.close()
         logging.debug("finished processing packets")
         
@@ -434,7 +416,7 @@ class ByteStreamSession(threading.Thread):
         status = {}
         status['sid'] = self.sid
         status['processing'] = self.process
-        status['otherPartyJID'] = self.otherPartyJid
+        status['otherPartyJID'] = self.otherPartyJid.jid
         status['streamClosed'] = self.streamClosed
         status['lastMessageTimestamp'] = self.__lastMessage
         if self.getSavedFileName():
@@ -485,7 +467,7 @@ class ByteStreamSession(threading.Thread):
                     data = file.read(self.__fileReadSize)
                     if data == str(''): break
                     iq = self.__xmpp.makeIqSet()
-                    dataElem = ET.Element('{%s}data' %XMLNS, sid=self.sid, seq=str(self.getNextOutSeqId()))
+                    dataElem = ET.Element('{%s}data' %xep_0047.XMLNS, sid=self.sid, seq=str(self.getNextOutSeqId()))
                     dataElem.text = base64.b64encode(data)
                     iq['to'] = self.otherPartyJid
                     iq.setPayload(dataElem)
@@ -493,7 +475,8 @@ class ByteStreamSession(threading.Thread):
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
                     iq.send(block=False, priority=2)
                 
-        self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': self.sid})
+        #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': self.sid})
+        self.__plugin.fileFinishedSending(sid=self.sid)
         self._closeStream()
         self.process = False
         
@@ -523,21 +506,21 @@ class ByteStreamSession(threading.Thread):
 
 '''stanza objects'''
 class Open(ElementBase):
-    namespace = XMLNS
+    namespace = xep_0047.XMLNS
     name = 'open'
     plugin_attrib = 'open'
     interfaces = set(('block-size', 'sid', 'stanza'))
     #sub_interfaces = interfaces
 
 class Close(ElementBase):
-    namespace = XMLNS
+    namespace = xep_0047.XMLNS
     name = 'close'
     plugin_attrib = 'close'
     interfaces = set(('sid',))
     #sub_interfaces = interfaces
     
 class Data(ElementBase):
-    namespace = XMLNS
+    namespace = xep_0047.XMLNS
     name = 'data'
     plugin_attrib = 'data'
     interfaces = set(('data','sid', 'seq'))
