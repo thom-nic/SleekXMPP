@@ -389,7 +389,7 @@ def parseRequestXMLToDict(xml):
     xferInfo['otherParty'] = xml.get('from')
     xferInfo['sid'] = xml.find('.//{http://jabber.org/protocol/si}si').get('id')
     elem = xml.find('.//{http://jabber.org/protocol/si}si/{http://jabber.org/protocol/si/profile/file-transfer}file')
-    xferInfo['filename'] = elem.get('name')
+    xferInfo['filename'] = elem.get('name').replace('/', '')
     xferInfo['filesize'] = elem.get('size')
     xferInfo['filehash'] = elem.get('hash')
     xferInfo['filedate'] = elem.get('date') 
