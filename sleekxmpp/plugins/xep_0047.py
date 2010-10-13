@@ -334,32 +334,36 @@ class ByteStreamSession(threading.Thread):
         the file is closed, closing the stream if the session times out, and 
         ensuring that if a file is being sent that the send will quiesce properly.   
         '''
-        if self.getSavedFileName():
-            self.__incFile = open(self.getSavedFileName(), 'wb')
+        try:
+            if self.getSavedFileName():
+                self.__incFile = open(self.getSavedFileName(), 'wb')
+                
+            while self.process:
+                logging.debug("seconds since last message: %f" %self.__lastMessage)
+                if time.time() - self.__lastMessage <= self.timeout: 
+                    time.sleep(2)
+                else: # no file to send and the file transfer has timed out, close up the stream
+                    logging.info('file transfer timeout')
+                    self._closeStream()
+                    break
+        except Exception, e:
+            logging.error('error during file transfer.  sid: %s, error: %s' %(self.sid, e))
+        finally:
+            logging.debug("end of stream. remove data handlers")
+            #remove the file handlers, stream has ended
+            self.__xmpp.removeHandler('file_receiver_iq_%s' %self.sid)
             
-        while self.process:
-            logging.debug("seconds since last message: %f" %self.__lastMessage)
-            if time.time() - self.__lastMessage <= self.timeout: 
-                time.sleep(2)
-            else: # no file to send and the file transfer has timed out, close up the stream
-                logging.info('file transfer timeout')
-                self._closeStream()
-                break
-        
-        logging.debug("end of stream. remove data handlers")
-        #remove the file handlers, stream has ended
-        self.__xmpp.removeHandler('file_receiver_iq_%s' %self.sid)
-        
-        if self.__sendThread:
-            self.__sendThread.join()
-            del self.__sendThread
-        
-        #close the file hander 
-        if self.__incFile:
-            #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
-            self.__plugin.fileFinishedReceiving(sid=self.sid, filename=self.getSavedFileName())
-            self.__incFile.close()
-        logging.debug("finished processing packets")
+            if self.__sendThread:
+                self.__sendThread.join()
+                del self.__sendThread
+            
+            #close the file hander 
+            if self.__incFile:
+                #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': self.sid, 'filename':self.getSavedFileName()})
+                self.__plugin.fileFinishedReceiving(sid=self.sid, filename=self.getSavedFileName())
+                self.__incFile.close()
+            logging.debug("finished processing packets")
+            
         
     def getNextIncSeqId(self):
         with self.__incSeqLock:
