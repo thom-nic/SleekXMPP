@@ -1,21 +1,9 @@
 """
-	SleekXMPP: The Sleek XMPP Library
-	Copyright (C) 2007  Nathanael C. Fritz
-	This file is part of SleekXMPP.
-
-	SleekXMPP is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	SleekXMPP is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with SleekXMPP; if not, write to the Free Software
-	Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+    SleekXMPP: The Sleek XMPP Library
+    Copyright (C) 2010 Nathanael C. Fritz
+    This file is part of SleekXMPP.
+    
+    See the file LICENSE for copying permission.
 """
 from __future__ import with_statement
 from xml.etree import cElementTree as ET
@@ -50,7 +38,7 @@ class xep_0078(base.base_plugin):
 		username.text = self.xmpp.username
 		auth_request_query.append(username)
 		auth_request.append(auth_request_query)
-		result = self.xmpp.send(auth_request, self.xmpp.makeIqResult(self.xmpp.id))
+		result = auth_request.send()
 		rquery = result.find('{jabber:iq:auth}query')
 		attempt = self.xmpp.makeIqSet()
 		query = ET.Element('{jabber:iq:auth}query')
@@ -69,7 +57,7 @@ class xep_0078(base.base_plugin):
 			digest.text = hashlib.sha1(b"%s%s" % (self.streamid, self.xmpp.password)).hexdigest()
 			query.append(digest)
 		attempt.append(query)
-		result = self.xmpp.send(attempt, self.xmpp.makeIq(self.xmpp.id))
+		result = attempt.send()
 		if result.attrib['type'] == 'result':
 			with self.xmpp.lock:
 				self.xmpp.authenticated = True

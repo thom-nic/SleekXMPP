@@ -178,15 +178,19 @@ class xep_0009(base.base_plugin):
 	def plugin_init(self):
 		self.xep = '0009'
 		self.description = 'Jabber-RPC'
-		self.xmpp.add_handler("<iq type='set'><query xmlns='jabber:iq:rpc' /></iq>", self._callMethod)
-		self.xmpp.add_handler("<iq type='result'><query xmlns='jabber:iq:rpc' /></iq>", self._callResult)
-		self.xmpp.add_handler("<iq type='error'><query xmlns='jabber:iq:rpc' /></iq>", self._callError)
+		self.xmpp.add_handler("<iq type='set'><query xmlns='jabber:iq:rpc' /></iq>", 
+                                      self._callMethod, name='Jabber RPC Call')
+		self.xmpp.add_handler("<iq type='result'><query xmlns='jabber:iq:rpc' /></iq>", 
+                                      self._callResult, name='Jabber RPC Result')
+		self.xmpp.add_handler("<iq type='error'><query xmlns='jabber:iq:rpc' /></iq>", 
+                                      self._callError, name='Jabber RPC Error')
 		self.entries = {}
 		self.activeCalls = []
 
 	def post_init(self):
-		self.xmpp['xep_0030'].add_feature('jabber:iq:rpc')
-		self.xmpp['xep_0030'].add_identity('automatition','rpc')
+		base.base_plugin.post_init(self)
+		self.xmpp.plugin['xep_0030'].add_feature('jabber:iq:rpc')
+		self.xmpp.plugin['xep_0030'].add_identity('automatition','rpc')
 
 	def register_call(self, method, name=None):
 		#@returns an string that can be used in acl commands.
