@@ -157,7 +157,7 @@ class Iq(RootStanza):
         StanzaBase.reply(self)
         return self
 
-    def send(self, block=True, timeout=RESPONSE_TIMEOUT):
+    def send(self, block=True, timeout=RESPONSE_TIMEOUT, priority=5):
         """
         Send an <iq> stanza over the XML stream.
 
@@ -177,7 +177,7 @@ class Iq(RootStanza):
         if block and self['type'] in ('get', 'set'):
             waitfor = Waiter('IqWait_%s' % self['id'], MatcherId(self['id']))
             self.stream.registerHandler(waitfor)
-            StanzaBase.send(self)
+            StanzaBase.send(self, priority)
             return waitfor.wait(timeout)
         else:
-            return StanzaBase.send(self)
+            return StanzaBase.send(self, priority)
