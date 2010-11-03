@@ -206,7 +206,9 @@ class basexmpp(object):
 				x = threading.Thread(name="Event_%s" % str(handler[0]), target=handler[0], args=(eventdata,))
 				x.start()
 			else:
-				handler[0](eventdata)
+				try: handler[0](eventdata)
+				except: logging.exception( "Exception thrown from event handler %s(%s)", 
+					        handler, eventdata )
 			if handler[2]: #disposable
 				with self.lock:
 					self.event_handlers[name].pop(self.event_handlers[name].index(handler))
