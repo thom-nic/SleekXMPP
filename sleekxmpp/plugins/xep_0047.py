@@ -31,6 +31,7 @@ from .. xmlstream.matcher.xpath import MatchXPath
 from .. xmlstream.matcher.xmlmask import MatchXMLMask
 from .. xmlstream.matcher.id import MatcherId
 from .. xmlstream.handler.callback import Callback
+from sleekxmpp.xmlstream import register_stanza_plugin
 from .. xmlstream.stanzabase import ElementBase, ET, JID
 from .. stanza.iq import Iq
 
@@ -96,9 +97,9 @@ class xep_0047(xep_0096.FileTransferProtocol):
         self.streamSessions = {} #id:thread
         self.__streamSetupLock = threading.Lock()
         #Register the xmpp stanzas used in this plugin
-        self.xmpp.stanzaPlugin(Iq, Open)
-        self.xmpp.stanzaPlugin(Iq, Close)
-        self.xmpp.stanzaPlugin(Iq, Data)
+        register_stanza_plugin(Iq, Open)
+        register_stanza_plugin(Iq, Close)
+        register_stanza_plugin(Iq, Data)
         #add handlers to listen for incoming requests
         self.xmpp.registerHandler(Callback('xep_0047_open_stream', MatchXPath('{%s}iq/{%s}open'  %(self.xmpp.default_ns, xep_0047.XMLNS)), self._handleIncomingTransferRequest, thread=True))
         self.xmpp.registerHandler(Callback('xep_0047_close_stream', MatchXPath('{%s}iq/{%s}close' %(self.xmpp.default_ns, xep_0047.XMLNS)), self._handleStreamClosed, thread=False))
