@@ -873,7 +873,7 @@ class XMLStream(object):
         try:
             while not self.stop.isSet():
                 try:
-                    data = self.send_queue.get(True, 1)
+                    data = self.send_queue.get(True, 1)[1]
                 except queue.Empty:
                     continue
                 logging.debug("SEND: %s" % data)
