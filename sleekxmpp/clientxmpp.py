@@ -322,7 +322,7 @@ class ClientXMPP(BaseXMPP):
             for sasl_mech in sasl_mechs:
                 self.features.append("sasl:%s" % sasl_mech.text)
             if 'sasl:DIGEST-MD5' in self.features:
-                self.sendRaw("<auth xmlns='%s' mechanism='DIGEST-MD5'/>" %sasl_ns, priority=1) 
+                self.sendRaw("<auth xmlns='%s' mechanism='DIGEST-MD5'/>" %sasl_ns) 
             elif 'sasl:PLAIN' in self.features and self.boundjid.user:
                 if sys.version_info < (3, 0):
                     user = bytes(self.boundjid.user)
@@ -361,8 +361,7 @@ class ClientXMPP(BaseXMPP):
         logging.debug("MD5 auth challenge: %s", challenge)
 
         if challenge.get('rspauth'): #authenticated success... send response
-            self.sendRaw("""<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>""", 
-                         priority=1)
+            self.sendRaw("""<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>""")
             return
         #TODO: use realm if supplied by server, use default qop unless supplied by server
         #Realm, nonce, qop should all be present
@@ -386,8 +385,7 @@ class ClientXMPP(BaseXMPP):
                                    cnonce, md5digest(a2) ) )
         response = 'charset=utf-8,username="%s",realm="%s",nonce="%s",nc=00000001,cnonce="%s",digest-uri="%s",response=%s,qop=%s,' \
             % (self.boundjid.user, self.boundjid.host, challenge["nonce"], cnonce, "xmpp/%s" % self.boundjid.host, responseHash, challenge["qop"])
-        self.sendRaw("<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>%s</response>" % base64.encodestring(response)[:-1],
-                priority=1 )
+        self.sendRaw("<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>%s</response>" % base64.encodestring(response)[:-1])
 
     def _handle_auth_success(self, xml):
         """
