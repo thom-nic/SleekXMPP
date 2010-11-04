@@ -109,6 +109,20 @@ class ClientXMPP(BaseXMPP):
                              'jabber:iq:roster')),
                          self._handle_roster))
 
+        #SASL Auth handlers
+        sasl_ns = 'urn:ietf:params:xml:ns:xmpp-sasl'
+        self.add_handler("<success xmlns='%s' />" % sasl_ns,
+                         self._handle_auth_success,
+                         name='SASL Sucess',
+                         instream=True)
+        self.add_handler("<failure xmlns='%s' />" % sasl_ns,
+                         self._handle_auth_fail,
+                         name='SASL Failure',
+                         instream=True)
+        self.add_handler("<challenge xmlns='%s' />"  % sasl_ns, 
+                         self._handle_sasl_digest_md5_auth, 
+                         instream=True)
+        
         self.register_feature(
             "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls' />",
             self._handle_starttls, True)
@@ -302,20 +316,14 @@ class ClientXMPP(BaseXMPP):
 
         logging.debug("Starting SASL Auth")
         sasl_ns = 'urn:ietf:params:xml:ns:xmpp-sasl'
-        self.add_handler("<success xmlns='%s' />" % sasl_ns,
-                         self._handle_auth_success,
-                         name='SASL Sucess',
-                         instream=True)
-        self.add_handler("<failure xmlns='%s' />" % sasl_ns,
-                         self._handle_auth_fail,
-                         name='SASL Failure',
-                         instream=True)
 
         sasl_mechs = xml.findall('{%s}mechanism' % sasl_ns)
         if sasl_mechs:
             for sasl_mech in sasl_mechs:
                 self.features.append("sasl:%s" % sasl_mech.text)
-            if 'sasl:PLAIN' in self.features and self.boundjid.user:
+            if 'sasl:DIGEST-MD5' in self.features:
+                self.sendRaw("<auth xmlns='%s' mechanism='DIGEST-MD5'/>" %sasl_ns, priority=1) 
+            elif 'sasl:PLAIN' in self.features and self.boundjid.user:
                 if sys.version_info < (3, 0):
                     user = bytes(self.boundjid.user)
                     password = bytes(self.password)
@@ -337,6 +345,49 @@ class ClientXMPP(BaseXMPP):
                 logging.error("No appropriate login method.")
                 self.disconnect()
         return True
+    
+    def _handle_sasl_digest_md5_auth(self, xml):
+        sasl_ns = 'urn:ietf:params:xml:ns:xmpp-sasl'
+        self.add_handler("<success xmlns='%s' />" % sasl_ns,
+                         self._handle_auth_success,
+                         name='SASL Sucess',
+                         instream=True)
+        self.add_handler("<failure xmlns='%s' />" % sasl_ns,
+                         self._handle_auth_fail,
+                         name='SASL Failure',
+                         instream=True)
+        challenge = [item.split('=', 1) for item in base64.b64decode(xml.text).replace("\"", "").split(',', 6) ]
+        challenge = dict(challenge)
+        logging.debug("MD5 auth challenge: %s", challenge)
+
+        if challenge.get('rspauth'): #authenticated success... send response
+            self.sendRaw("""<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>""", 
+                         priority=1)
+            return
+        #TODO: use realm if supplied by server, use default qop unless supplied by server
+        #Realm, nonce, qop should all be present
+        if not challenge.get('qop') or not challenge.get('nonce'):
+            logging.error("Error during digest-md5 authentication. Challenge missing critical information. Challenge: %s" 
+                          %base64.b64decode(xml.text))
+            self._handle_auth_fail(xml)
+            return
+        #TODO: charset can be either UTF-8 or if not present use ISO 8859-1 defaulting for UTF-8 for now
+        #Compute the cnonce - a unique hex string only used in this request
+        cnonce = ""
+        for i in range(7):
+            cnonce+=hex(int(random.random()*65536*4096))[2:]
+        cnonce = base64.encodestring(cnonce)[0:-1]
+        a1 = b"%s:%s:%s" %(md5("%s:%s:%s" % (self.boundjid.user, self.boundjid.host, self.password)), 
+                           challenge["nonce"].encode("UTF-8"), cnonce.encode("UTF-8") )
+        a2 = "AUTHENTICATE:xmpp/%s" %self.boundjid.host
+        responseHash = md5digest("%s:%s:00000001:%s:auth:%s" 
+                                 %(md5digest(a1), 
+                                   challenge["nonce"], 
+                                   cnonce, md5digest(a2) ) )
+        response = 'charset=utf-8,username="%s",realm="%s",nonce="%s",nc=00000001,cnonce="%s",digest-uri="%s",response=%s,qop=%s,' \
+            % (self.boundjid.user, self.boundjid.host, challenge["nonce"], cnonce, "xmpp/%s" % self.boundjid.host, responseHash, challenge["qop"])
+        self.sendRaw("<response xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>%s</response>" % base64.encodestring(response)[:-1],
+                priority=1 )
 
     def _handle_auth_success(self, xml):
         """
@@ -431,3 +482,21 @@ class ClientXMPP(BaseXMPP):
             iq.reply()
             iq.enable('roster')
             iq.send()
+            
+def md5(data):
+    try:
+        import hashlib
+        md5 = hashlib.md5(data)
+    except ImportError:
+        import md5
+        md5 = md5.new(data)
+    return md5.digest()
+
+def md5digest(data):
+    try:
+        import hashlib
+        md5 = hashlib.md5(data)
+    except ImportError:
+        import md5
+        md5 = md5.new(data)
+    return md5.hexdigest()
