@@ -171,6 +171,7 @@ class XMLStream(object):
 
         self.use_ssl = False
         self.use_tls = False
+        self.ca_certs = None
 
         self.default_ns = ''
         self.stream_header = "<stream>"
@@ -270,7 +271,10 @@ class XMLStream(object):
         self.socket.settimeout(None)
         if self.use_ssl and self.ssl_support:
             logging.debug("Socket Wrapped for SSL")
-            ssl_socket = ssl.wrap_socket(self.socket)
+            cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
+            ssl_socket = ssl.wrap_socket(self.socket,
+                                         ca_certs=self.ca_certs, 
+                                         cert_reqs=cert_policy)
             if hasattr(self.socket, 'socket'):
                 # We are using a testing socket, so preserve the top
                 # layer of wrapping.
@@ -373,9 +377,12 @@ class XMLStream(object):
         """
         if self.ssl_support:
             logging.info("Negotiating TLS")
+            cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
             ssl_socket = ssl.wrap_socket(self.socket,
                                          ssl_version=ssl.PROTOCOL_TLSv1,
-                                         do_handshake_on_connect=False)
+                                         do_handshake_on_connect=False,
+                                         ca_certs=self.ca_certs,
+                                         cert_reqs=cert_policy)
             if hasattr(self.socket, 'socket'):
                 # We are using a testing socket, so preserve the top
                 # layer of wrapping.
