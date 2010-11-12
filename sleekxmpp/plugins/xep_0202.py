@@ -46,10 +46,9 @@ class xep_0202(base.base_plugin):
 		iq = self.xmpp.Iq( stream=self.xmpp, sto=to, stype='get',
 				xml = ET.Element(_XMLNS + 'time') )
 		resp = iq.send(iq) # wait for response
-		 
 		return TimeElement( 
 			resp.find(_XMLNS + 'time/utc').text,
-			xml.find(_XMLNS + 'time/tzo').text ) 
+			resp.find(_XMLNS + 'time/tzo').text ) 
 
 	def _handle_get(self,xml):
 		iq = self.xmpp.Iq( sid=xml.get('id'), sto=xml.get('from'), stype='result' )
@@ -69,7 +68,7 @@ class TimeElement:
 		elif type(utc) is str: # parse ISO string
 			dt_format = '%Y-%m-%dT%H:%M:%S'
 			if utc.find('.') > -1: dt_format += '.%f' # milliseconds in format
-			self.utc = datetime.strptime( time_str, dt_format + 'Z' )
+			self.utc = datetime.strptime( utc, dt_format + 'Z' )
 		elif type(utc) is float: # parse posix timestamp
 			self.utc = datetime.utcfromtimestamp()
 		else: self.utc = utc
