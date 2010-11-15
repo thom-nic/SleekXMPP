@@ -178,6 +178,8 @@ class XMLStream(object):
         self.stop = threading.Event()
         self.stream_end_event = threading.Event()
         self.stream_end_event.set()
+        self.session_started_event = threading.Event()
+        self.session_started_event.clear()
         self.event_queue = queue.Queue()
         self.send_queue = queue.PriorityQueue()
         self.scheduler = Scheduler(self.event_queue, self.stop)
@@ -305,7 +307,7 @@ class XMLStream(object):
 
     def _disconnect(self, reconnect=False):
         # Send the end of stream marker.
-        self.send_raw(self.stream_footer)
+        self.sendStreamPacket(self.stream_footer)
         # Wait for confirmation that the stream was
         # closed in the other direction.
         if not reconnect:
@@ -675,7 +677,7 @@ class XMLStream(object):
             firstrun = False
             try:
                 if self.is_client:
-                    self.send_raw(self.stream_header)
+                    self.sendStreamPacket(self.stream_header)
                 # The call to self.__read_xml will block and prevent
                 # the body of the loop from running until a disconnect
                 # occurs. After any reconnection, the stream header will
@@ -684,7 +686,7 @@ class XMLStream(object):
                     # Ensure the stream header is sent for any
                     # new connections.
                     if self.is_client:
-                        self.send_raw(self.stream_header)
+                        self.sendStreamPacket(self.stream_header)
             except KeyboardInterrupt:
                 logging.debug("Keyboard Escape Detected in _process")
                 self.stop.set()
@@ -872,6 +874,9 @@ class XMLStream(object):
         """
         try:
             while not self.stop.isSet():
+                #if the session hasn't started, don't start sending queued messages
+                if not self.session_started_event.isSet(): 
+                    time.sleep(.1)
                 try:
                     data = self.send_queue.get(True, 1)[1]
                 except queue.Empty:
@@ -890,3 +895,10 @@ class XMLStream(object):
             self.disconnect()
             self.event_queue.put(('quit', None, None))
             return
+        
+    def sendStreamPacket(self, data):
+        try:
+            self.socket.send(data.encode('utf-8'))
+        except:
+            logging.warning("Failed to send %s" % data)
+            self.disconnect(self.auto_reconnect)
