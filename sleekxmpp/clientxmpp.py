@@ -423,7 +423,7 @@ class ClientXMPP(BaseXMPP):
             res.text = self.boundjid.resource
             xml.append(res)
         iq.append(xml)
-        response = iq.send()
+        response = self.sendStreamPacket(iq, True)
 
         bind_ns = 'urn:ietf:params:xml:ns:xmpp-bind'
         self.set_jid(response.xml.find('{%s}bind/{%s}jid' % (bind_ns,
@@ -446,7 +446,7 @@ class ClientXMPP(BaseXMPP):
         """
         if self.authenticated and self.bound:
             iq = self.makeIqSet(xml)
-            response = iq.send()
+            response = self.sendStreamPacket(iq, True)
             logging.debug("Established Session")
             self.sessionstarted = True
             self.session_started_event.set()

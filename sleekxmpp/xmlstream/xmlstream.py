@@ -25,6 +25,8 @@ except ImportError:
 from sleekxmpp.thirdparty.statemachine import StateMachine
 from sleekxmpp.xmlstream import Scheduler, tostring
 from sleekxmpp.xmlstream.stanzabase import StanzaBase, ET
+from sleekxmpp.xmlstream.handler import Waiter
+from sleekxmpp.xmlstream.matcher import MatcherId
 
 # In Python 2.x, file socket objects are broken. A patched socket
 # wrapper is provided for this case in filesocket.py.
@@ -594,6 +596,7 @@ class XMLStream(object):
         data = str(data)
         if mask is not None:
             logging.warning("Use of send mask waiters is deprecated.")
+            from sleekxmpp.xmlstream.matcher import MatchXMLMask
             wait_for = Waiter("SendWait_%s" % self.new_id(),
                               MatchXMLMask(mask))
             self.register_handler(wait_for)
@@ -896,9 +899,15 @@ class XMLStream(object):
             self.event_queue.put(('quit', None, None))
             return
         
-    def sendStreamPacket(self, data):
+    def sendStreamPacket(self, data, block=False):
         try:
-            self.socket.send(data.encode('utf-8'))
+            if not block:
+                self.socket.send(data.encode('utf-8'))
+            else:
+                waitfor = Waiter('IqWait_%s' % data['id'], MatcherId(data['id']))
+                self.register_handler(waitfor)
+                self.socket.send(tostring(data.xml).encode('utf-8'))
+                return waitfor.wait()
         except:
             logging.warning("Failed to send %s" % data)
             self.disconnect(self.auto_reconnect)

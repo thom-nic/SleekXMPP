@@ -12,9 +12,7 @@ try:
 except ImportError:
     import Queue as queue
 
-from sleekxmpp.xmlstream import StanzaBase, RESPONSE_TIMEOUT
 from sleekxmpp.xmlstream.handler.base import BaseHandler
-
 
 class Waiter(BaseHandler):
 
@@ -66,7 +64,7 @@ class Waiter(BaseHandler):
         """
         pass
 
-    def wait(self, timeout=RESPONSE_TIMEOUT):
+    def wait(self, timeout=None):
         """
         Block an event handler while waiting for a stanza to arrive.
 
@@ -81,6 +79,9 @@ class Waiter(BaseHandler):
                        arrive. Defaults to the global default timeout
                        value sleekxmpp.xmlstream.RESPONSE_TIMEOUT.
         """
+        if timeout is None:
+            from sleekxmpp.xmlstream.xmlstream import RESPONSE_TIMEOUT
+            timeout = RESPONSE_TIMEOUT
         try:
             stanza = self._payload.get(True, timeout)
         except queue.Empty:
