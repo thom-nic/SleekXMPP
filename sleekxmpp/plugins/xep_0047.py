@@ -40,14 +40,14 @@ STREAM_CLOSED_EVENT = 'BYTE_STREAM_CLOSED'
 def sendAckIQ(xmpp, to, id):
     iq = xmpp.makeIqResult(id=id)
     iq['to'] = to
-    iq.send(priority=1)
+    iq.send()
     
 def sendCloseStream(xmpp, to, sid):
     close = ET.Element('{%s}close' %xep_0047.XMLNS, sid=sid)
     iq = xmpp.makeIqSet()
     iq['to'] = to
     iq.setPayload(close)
-    iq.send(priority=1)
+    iq.send()
     
 
 class xep_0047(xep_0096.FileTransferProtocol):
@@ -155,7 +155,7 @@ class xep_0047(xep_0096.FileTransferProtocol):
             openElem = ET.Element('{%s}open' %xep_0047.XMLNS, sid=sid, stanza=self.stanzaType)
             openElem.set('block-size', str(self.prefBlockSize))
             iq.setPayload(openElem)
-            result = iq.send(block=True, timeout=10, priority=1)
+            result = iq.send(block=True, timeout=10)
             
             if result.get('type') == 'error': 
                 if result.find('*/{urn:ietf:params:xml:ns:xmpp-stanzas}service-unavailable') != None:
@@ -214,7 +214,7 @@ class xep_0047(xep_0096.FileTransferProtocol):
                 errIq = self.xmpp.makeIqError(id=iq['id'], condition='resource-constraint')
                 errIq['to'] = iq['from']
                 errIq['error']['type'] = 'modify'
-                errIq.send(priority=1)
+                errIq.send()
                 return
             
             #Check to see if the file transfer should be accepted
@@ -244,7 +244,7 @@ class xep_0047(xep_0096.FileTransferProtocol):
                 errIq = self.xmpp.makeIqError(id=iq['id'], condition='not-acceptable')
                 errIq['to'] = iq['from']
                 errIq['error']['type'] = 'cancel'
-                errIq.send(priority=1)
+                errIq.send()
         
     def _handleStreamClosed(self, iq):
         '''
@@ -265,7 +265,7 @@ class xep_0047(xep_0096.FileTransferProtocol):
             errIq = self.xmpp.makeIqError(id=iq['id'], condition='item-not-found')
             errIq['to'] = iq['from']
             errIq['error']['type'] = 'cancel'
-            errIq.send(priority=1)
+            errIq.send()
             
     def _eventCloseStream(self, eventdata):
         '''
@@ -478,7 +478,7 @@ class ByteStreamSession(threading.Thread):
                     iq.setPayload(dataElem)
                     self.__sendAckEvent.clear()
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
-                    iq.send(block=False, priority=2)
+                    iq.send(block=False)
                 
         #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': self.sid})
         self.__plugin.fileFinishedSending(sid=self.sid)

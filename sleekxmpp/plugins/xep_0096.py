@@ -278,7 +278,7 @@ class xep_0096(base.base_plugin):
             
             returnIQ = makeAcceptResultIQ(self.xmpp.makeIqResult(xml.get('id')), xml.get('from'), protocolNS)
                         
-        returnIQ.send(priority=2, block=False)   
+        returnIQ.send(block=False)   
         
     def _receiveCompleteHandler(self, dict):
         xferInfo = self.activeBytestreams.pop(dict['sid'])
@@ -328,7 +328,7 @@ class xep_0096(base.base_plugin):
                                fileName[fileName.rfind('/') + 1:], 
                                os.path.getsize(fileName),
                                fileHash=md5.hexdigest())
-        result = iq.send(block=True, priority=1, timeout=10)
+        result = iq.send(block=True, timeout=10)
         if result.get('type') == 'error': 
             logging.debug('session rejected')
             raise Exception('Session rejected: %s' %result)
