@@ -1,88 +1,115 @@
 """
-	SleekXMPP: The Sleek XMPP Library
-	Copyright (C) 2007  Nathanael C. Fritz
-	This file is part of SleekXMPP.
+    SleekXMPP: The Sleek XMPP Library
+    Copyright (C) 2010 Nathanael C. Fritz
+    This file is part of SleekXMPP.
 
-	SleekXMPP is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	SleekXMPP is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with SleekXMPP; if not, write to the Free Software
-	Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+    See the file LICENSE for copying permission.
 """
 
-from . import base
-from xml.etree import cElementTree as ET
-from datetime import datetime
+from datetime import datetime, tzinfo
+import logging
+import time
 
-XMLNS = 'urn:xmpp:time'
-_XMLNS = '{%s}' % XMLNS
+from . import base
+from .. stanza.iq import Iq
+from .. xmlstream.handler.callback import Callback
+from .. xmlstream.matcher.xpath import MatchXPath
+from .. xmlstream import ElementBase, ET, JID, register_stanza_plugin
+
+
+log = logging.getLogger(__name__)
+
+
+class EntityTime(ElementBase):
+    name = 'time'
+    namespace = 'urn:xmpp:time'
+    plugin_attrib = 'entity_time'
+    interfaces = set(('tzo', 'utc'))
+    sub_interfaces = set(('tzo', 'utc'))
+
+    #def get_utc(self): # TODO: return a datetime.tzinfo object?
+        #pass
+
+    def set_tzo(self, tzo): # TODO: support datetime.tzinfo objects?
+        if isinstance(tzo, tzinfo):
+            td = datetime.now(tzo).utcoffset() # What if we are faking the time? datetime.now() shouldn't be used here'
+            seconds = td.seconds + td.days * 24 * 3600
+            sign = ('+' if seconds >= 0 else '-')
+            minutes = abs(seconds // 60)
+            tzo = '{sign}{hours:02d}:{minutes:02d}'.format(sign=sign, hours=minutes//60, minutes=minutes%60)
+        elif not isinstance(tzo, str):
+            raise TypeError('The time should be a string or a datetime.tzinfo object.')
+        self._set_sub_text('tzo', tzo)
+
+    def get_utc(self):
+        # Returns a datetime object instead the string. Is this a good idea?
+        value = self._get_sub_text('utc')
+        if '.' in value:
+            return datetime.strptime(value, '%Y-%m-%d.%fT%H:%M:%SZ')
+        else:
+            return datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ')
+
+    def set_utc(self, tim=None):
+        if isinstance(tim, datetime):
+            if tim.utcoffset():
+                tim = tim - tim.utcoffset()
+            tim = tim.strftime('%Y-%m-%dT%H:%M:%SZ')
+        elif isinstance(tim, time.struct_time):
+            tim = time.strftime('%Y-%m-%dT%H:%M:%SZ', tim)
+        elif not isinstance(tim, str):
+            raise TypeError('The time should be a string or a datetime.datetime or time.struct_time object.')
+
+        self._set_sub_text('utc', tim)
+
 
 class xep_0202(base.base_plugin):
-	"""
-	Implements XEP-0202 Entity Time
+    """
+    XEP-0202 Entity Time
+    """
+    def plugin_init(self):
+        self.description = "Entity Time"
+        self.xep = "0202"
 
-	TODO currently no support for the user's 'local' timezone; `<tzo>` is always reported as `Z` (UTC).
-	"""
-	
-	def plugin_init(self):
-		self.xep = '0202'
-		self.description = "Entity Time"
-		self.xmpp.add_handler("<iq type='get'><time xmlns='%s' /></iq>" % XMLNS, self._handle_get)
-	
-	def post_init(self):
-		base.base_plugin.post_init(self)
-		disco = self.xmpp.plugin.get('xep_0030',None)
-		if disco: disco.add_feature(XMLNS)
+        self.xmpp.registerHandler(
+            Callback('Time Request',
+                 MatchXPath('{%s}iq/{%s}time' % (self.xmpp.default_ns,
+                                  EntityTime.namespace)),
+                 self.handle_entity_time_query))
+        register_stanza_plugin(Iq, EntityTime)
 
-	def send_request(self,to):
-		iq = self.xmpp.Iq( stream=self.xmpp, sto=to, stype='get',
-				xml = ET.Element(_XMLNS + 'time') )
-		resp = iq.send(iq) # wait for response
-		return TimeElement( 
-			resp.find(_XMLNS + 'time/utc').text,
-			resp.find(_XMLNS + 'time/tzo').text ) 
-
-	def _handle_get(self,xml):
-		iq = self.xmpp.Iq( sid=xml.get('id'), sto=xml.get('from'), stype='result' )
-		iq.append( TimeElement().to_xml() )
-		self.xmpp.send(iq)
-		
+        self.xmpp.add_event_handler('entity_time_request', self.handle_entity_time)
 
 
-class TimeElement:
-	"""
-	Time response data
-	"""
+    def post_init(self):
+        base.base_plugin.post_init(self)
 
-	def __init__(self, utc=None, tzo="Z"):
-		if utc is None:
-			self.utc = datetime.utcnow()
-		elif type(utc) is str: # parse ISO string
-			dt_format = '%Y-%m-%dT%H:%M:%S'
-			if utc.find('.') > -1: dt_format += '.%f' # milliseconds in format
-			self.utc = datetime.strptime( utc, dt_format + 'Z' )
-		elif type(utc) is float: # parse posix timestamp
-			self.utc = datetime.utcfromtimestamp()
-		else: self.utc = utc
-		self.tzo = tzo
+        self.xmpp.plugin['xep_0030'].add_feature('urn:xmpp:time')
 
-	def to_xml(self):
-		time = ET.Element(_XMLNS+'time')
-		child = ET.Element('tzo')
-		child.text = str(self.tzo)
-		time.append( child )
-		child = ET.Element('utc')
-		child.text = datetime.isoformat(self.utc) + "Z"
-		time.append( child )
-		return time
+    def handle_entity_time_query(self, iq):
+        if iq['type'] == 'get':
+            log.debug("Entity time requested by %s" % iq['from'])
+            self.xmpp.event('entity_time_request', iq)
+        elif iq['type'] == 'result':
+            log.debug("Entity time result from %s" % iq['from'])
+            self.xmpp.event('entity_time', iq)
 
-	def __str__(self):
-		return ET.tostring( self.to_xml() )
+    def handle_entity_time(self, iq):
+        iq = iq.reply()
+        iq.enable('entity_time')
+        tzo = time.strftime('%z') # %z is not on all ANSI C libraries
+        tzo = tzo[:3] + ':' + tzo[3:]
+        iq['entity_time']['tzo'] = tzo
+        iq['entity_time']['utc'] = datetime.utcnow()
+        iq.send()
+
+    def get_entity_time(self, jid):
+        iq = self.xmpp.makeIqGet()
+        iq.enable('entity_time')
+        iq.attrib['to'] = jid
+        iq.attrib['from'] = self.xmpp.boundjid.full
+        id = iq.get('id')
+        result = iq.send()
+        if result and result is not None and result.get('type', 'error') != 'error':
+            return {'utc': result['entity_time']['utc'], 'tzo': result['entity_time']['tzo']}
+        else:
+            return False
