@@ -19,11 +19,11 @@ from sleekxmpp import plugins
 from sleekxmpp import stanza
 from sleekxmpp.basexmpp import BaseXMPP
 from sleekxmpp.stanza import Message, Presence, Iq
-from sleekxmpp.xmlstream import XMLStream, RestartStream
+from sleekxmpp.xmlstream import XMLStream, RestartStream, tostring
 from sleekxmpp.xmlstream import StanzaBase, ET
 from sleekxmpp.xmlstream.matcher import *
 from sleekxmpp.xmlstream.handler import *
-from sleekxmpp.xmlstream.tostring.tostring import tostring
+
 
 # Flag indicating if DNS SRV records are available for use.
 SRV_SUPPORT = True
