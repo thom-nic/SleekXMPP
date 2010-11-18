@@ -34,7 +34,8 @@ class xep_0199(base.base_plugin):
 
     def scheduled_ping(self):
         log.debug("pinging...")
-        if self.xmpp.stop.isSet() is False and self.sendPing(self.xmpp.server, self.config.get('timeout', 30)) is False:
+        if not self.xmpp.stop.isSet() and self.sendPing(self.xmpp.boundjid.domain, 
+        	    self.config.get('timeout', 30)) is False:
             log.debug("Did not recieve ping back in time.  Requesting Reconnect.")
             self.xmpp.event('doreconnect')
 
