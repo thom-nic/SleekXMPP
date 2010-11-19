@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import types
-import signal
+import random
 try:
     import queue
 except ImportError:
@@ -48,6 +48,9 @@ SSL_SUPPORT = True
 #Delay/Wait time between checks to see if stop event is set
 WAIT_TIMEOUT = 1
 
+RECONNECT_MAX_DELAY = 360
+RECONNECT_QUIESCE_FACTOR = 1.6180339887498948 # Phi
+RECONNECT_QUIESCE_JITTER = 0.11962656472 # molar Planck constant times c, joule meter/mole
 
 log = logging.getLogger(__name__)
 
@@ -214,16 +217,6 @@ class XMLStream(object):
         self.keep_alive = DEFAULT_KEEPALIVE
         self._last_sent_time = time.time()
 
-        try:
-            if hasattr(signal, 'SIGHUP'):
-                signal.signal(signal.SIGHUP, self._handle_kill)
-            if hasattr(signal, 'SIGTERM'):
-                # Used in Windows
-                signal.signal(signal.SIGTERM, self._handle_kill)
-        except:
-            log.debug("Can not set interrupt signal handlers. " + \
-                          "SleekXMPP is not running from a main thread.")
-
     def _handle_kill(self, signum, frame):
         """
         Capture kill event and disconnect cleanly after first
@@ -278,9 +271,14 @@ class XMLStream(object):
 
         # Repeatedly attempt to connect until a successful connection
         # is established.
+        delay = 1.0 # reconnection delay
         connected = self.state.transition('disconnected', 'connected',
                                           func=self._connect)
         while reattempt and not connected:
+            delay = min(delay * RECONNECT_QUIESCE_FACTOR, RECONNECT_MAX_DELAY)
+            delay = random.normalvariate(delay, delay * RECONNECT_QUIESCE_JITTER)
+            logging.debug('Waiting %.3fs until next reconnect attempt...', delay)
+            time.sleep(delay)
             connected = self.state.transition('disconnected', 'connected',
                                               func=self._connect)
         return connected
@@ -701,6 +699,7 @@ class XMLStream(object):
 
         def start_thread(name, target):
             self.__thread[name] = threading.Thread(name=name, target=target)
+            self.__thread[name].daemon = True
             self.__thread[name].start()
 
         for t in range(0, HANDLER_THREADS):
