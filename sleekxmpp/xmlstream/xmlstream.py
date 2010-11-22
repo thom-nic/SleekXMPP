@@ -214,9 +214,6 @@ class XMLStream(object):
         self.auto_reconnect = True
         self.is_client = False
         
-        self.keep_alive = DEFAULT_KEEPALIVE
-        self._last_sent_time = time.time()
-
     def _handle_kill(self, signum, frame):
         """
         Capture kill event and disconnect cleanly after first
@@ -951,14 +948,10 @@ class XMLStream(object):
                 try:
                     data = self.send_queue.get(True, WAIT_TIMEOUT)[1]
                 except queue.Empty:
-                    if self._last_sent_time + self.keep_alive < time.time():    
-                        self.socket.sendall(' ')
-                        self._last_sent_time = time.time()
                     continue
                 log.debug("SEND: %s" % data)
                 try:
                     self.socket.send(data.encode('utf-8'))
-                    self._last_sent_time = time.time()
                 except:
                     log.warning("Failed to send %s" % data)
                     self.disconnect(self.auto_reconnect)
