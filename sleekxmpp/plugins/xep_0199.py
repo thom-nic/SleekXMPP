@@ -23,6 +23,7 @@ class xep_0199(base.base_plugin):
         self.xmpp.add_handler("<iq type='get' xmlns='%s'><ping xmlns='urn:xmpp:ping'/></iq>" % self.xmpp.default_ns, self.handler_ping, name='XMPP Ping')
         if self.config.get('keepalive', True):
             self.xmpp.add_event_handler('session_start', self.handler_pingserver, threaded=True)
+            self.xmpp.add_event_handler('doreconnect', self.doreconnect, threaded=True)
 
     def post_init(self):
         base.base_plugin.post_init(self)
@@ -33,9 +34,9 @@ class xep_0199(base.base_plugin):
 
     def scheduled_ping(self):
         log.debug("pinging...")
-        if self.sendPing(self.xmpp.server, self.config.get('timeout', 30)) is False:
+        if self.xmpp.stop.isSet() is False and self.sendPing(self.xmpp.server, self.config.get('timeout', 30)) is False:
             log.debug("Did not recieve ping back in time.  Requesting Reconnect.")
-            self.xmpp.reconnect()
+            self.xmpp.event('doreconnect')
 
     def handler_ping(self, xml):
         iq = self.xmpp.makeIqResult(xml.get('id', 'unknown'))
@@ -61,3 +62,6 @@ class xep_0199(base.base_plugin):
             #self.xmpp.disconnect(reconnect=True)
             return False
         return endTime - startTime
+    
+    def doreconnect(self, xml):
+        self.xmpp.reconnect()

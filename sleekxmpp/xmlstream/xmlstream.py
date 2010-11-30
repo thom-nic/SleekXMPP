@@ -283,7 +283,7 @@ class XMLStream(object):
     def _connect(self):
         self.stop.clear()
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
-        self.socket.settimeout(None)
+        self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
             logging.debug("Socket Wrapped for SSL")
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
@@ -323,9 +323,12 @@ class XMLStream(object):
                          and processing should be restarted.
                          Defaults to False.
         """
-        self.state.transition('connected', 'disconnected', wait=0.0,
+        if reconnect:
+            self.reconnect()
+        else:
+            self.state.transition('connected', 'disconnected', wait=0.0,
                               func=self._disconnect, args=(reconnect,))
-
+        
     def _disconnect(self, reconnect=False):
         # Send the end of stream marker.
         self.sendStreamPacket(self.stream_footer)
@@ -334,18 +337,23 @@ class XMLStream(object):
         if not reconnect:
             self.auto_reconnect = False
         self.stream_end_event.wait(4)
-        if not self.auto_reconnect:
-            self.stop.set()
+        self.stop.set()
+        self.session_started_event.clear()
         try:
+            self.socket.shutdown(Socket.SHUT_RDWR)
             self.socket.close()
             self.filesocket.close()
-            self.socket.shutdown(Socket.SHUT_RDWR)
+            for thread in self.__thread:
+                thread.join(.1)
+                
         except Socket.error as serr:
             pass
         finally:
             #clear your application state
             self.event("disconnected", direct=True)
             return True
+        
+            
 
     def reconnect(self):
         """
@@ -354,10 +362,11 @@ class XMLStream(object):
         log.debug("reconnecting...")
         self.state.transition('connected', 'disconnected', wait=2.0,
                               func=self._disconnect, args=(False,))
-        time.sleep(1)
+        time.sleep(3)
         log.debug("connecting...")
-        retval = self.state.transition('disconnected', 'connected',
-                                     wait=2.0, func=self._connect)
+        #retval = self.state.transition('disconnected', 'connected',
+        #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
+        retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
         if retval:
             self.process(threaded=True)
         return retval
@@ -381,9 +390,9 @@ class XMLStream(object):
             # version to work around a broken implementation in
             # Python 2.x.
             if sys.version_info < (3, 0):
-                self.filesocket = FileSocket(self.socket)
+                self.filesocket = FileSocket(self.socket, runningEvent=self.stop)
             else:
-                self.filesocket = self.socket.makefile('rb', 0)
+                self.filesocket = self.socket.makefile('rb', 0, runningEvent=self.stop)
             if not ignore:
                 self.state._set_state('connected')
 
@@ -695,9 +704,10 @@ class XMLStream(object):
         self.scheduler.process(threaded=True)
 
         def start_thread(name, target):
-            self.__thread[name] = threading.Thread(name=name, target=target)
-            self.__thread[name].daemon = True
-            self.__thread[name].start()
+            if self.__thread.get(name) is None or self.__thread.get(name).isAlive() == False:
+                self.__thread[name] = threading.Thread(name=name, target=target)
+                self.__thread[name].daemon = True
+                self.__thread[name].start()
 
         for t in range(0, HANDLER_THREADS):
             log.debug("Starting HANDLER THREAD")
@@ -744,6 +754,10 @@ class XMLStream(object):
                 log.debug("SystemExit in _process")
                 self.stop.set()
                 self.scheduler.run = False
+            except ssl.SSLError, e:
+                #log.exception('Socket Timeout... Continuing')
+                if e.errno == None: #FIXME
+                    continue
             except Socket.error:
                 log.exception('Socket Error')
             except:
@@ -945,6 +959,7 @@ class XMLStream(object):
                 #if the session hasn't started, don't start sending queued messages
                 if not self.session_started_event.isSet(): 
                     time.sleep(.1)
+                    continue
                 try:
                     data = self.send_queue.get(True, WAIT_TIMEOUT)[1]
                 except queue.Empty:
