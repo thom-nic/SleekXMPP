@@ -176,7 +176,7 @@ class ClientXMPP(BaseXMPP):
                 try:
                     xmpp_srv = "_xmpp-client._tcp.%s" % self.server
                     answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
-                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
                     log.debug("No appropriate SRV record found." + \
                                   " Using JID server name.")
                 else:
@@ -432,7 +432,7 @@ class ClientXMPP(BaseXMPP):
         self.set_jid(response.xml.find('{%s}bind/{%s}jid' % (bind_ns,
                                                              bind_ns)).text)
         self.bound = True
-        log.info("Node set to: %s" % self.boundjid.full)
+        log.info("Node set to: %s" % self.boundjid.fulljid)
         session_ns = 'urn:ietf:params:xml:ns:xmpp-session'
         if "{%s}session" % session_ns not in self.features or self.bindfail:
             log.debug("Established Session")

@@ -758,6 +758,8 @@ class XMLStream(object):
                 #log.exception('Socket Timeout... Continuing')
                 if e.errno == None: #FIXME
                     continue
+                else:
+                    log.exception('ssl socket error')
             except Socket.error:
                 log.exception('Socket Error')
             except:
@@ -981,6 +983,7 @@ class XMLStream(object):
         
     def sendStreamPacket(self, data, block=False):
         try:
+            log.debug("SEND: %s" % data)
             if not block:
                 self.socket.send(data.encode('utf-8'))
             else:
