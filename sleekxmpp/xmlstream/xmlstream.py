@@ -307,7 +307,7 @@ class XMLStream(object):
             picked = random.randint(0, intmax)
             for priority in priorities:
                 if picked <= priority:
-                    self.address[0] = addresses[priority]
+                    self.address = (addresses[priority], self.address[1])
                     break
 
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
