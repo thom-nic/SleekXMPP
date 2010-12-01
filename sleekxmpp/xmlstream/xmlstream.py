@@ -21,6 +21,8 @@ try:
     import queue
 except ImportError:
     import Queue as queue
+    
+import dns.resolver
 
 from sleekxmpp.thirdparty.statemachine import StateMachine
 from sleekxmpp.xmlstream import Scheduler, tostring
@@ -265,7 +267,8 @@ class XMLStream(object):
             self.use_ssl = use_ssl
         if use_tls is not None:
             self.use_tls = use_tls
-
+            
+        
         # Repeatedly attempt to connect until a successful connection
         # is established.
         delay = 1.0 # reconnection delay
@@ -282,6 +285,31 @@ class XMLStream(object):
 
     def _connect(self):
         self.stop.clear()
+        #do the srv lookup
+        try:
+            xmpp_srv = "_xmpp-client._tcp.%s" % self.address[0]
+            answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
+            log.debug("No appropriate SRV record found." + \
+                          " Using %s" %self.address[0])
+        else:
+            # Pick a random server, weighted by priority.
+            addresses = {}
+            intmax = 0
+            for answer in answers:
+                intmax += answer.priority
+                addresses[intmax] = (answer.target.to_text()[:-1],
+                                     answer.port)
+            #python3 returns a generator for dictionary keys
+            priorities = [x for x in addresses.keys()]
+            priorities.sort()
+
+            picked = random.randint(0, intmax)
+            for priority in priorities:
+                if picked <= priority:
+                    self.address[0] = addresses[priority]
+                    break
+
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
