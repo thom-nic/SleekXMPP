@@ -17,6 +17,7 @@ import threading
 import time
 import types
 import random
+from Queue import Full
 try:
     import queue
 except ImportError:
@@ -200,7 +201,7 @@ class XMLStream(object):
         self.session_started_event = threading.Event()
         self.session_started_event.clear()
         self.event_queue = queue.Queue()
-        self.send_queue = queue.PriorityQueue()
+        self.send_queue = queue.PriorityQueue(500)
         self.scheduler = Scheduler(self.state)
 
         self.namespace_map = {}
@@ -694,8 +695,13 @@ class XMLStream(object):
         Arguments:
             data -- Any string value.
         """
-        self.send_queue.put((priority, data))
-        return True
+        retval = True
+        try: 
+            self.send_queue.put((priority, data), block=True, timeout=1)
+        except Full:
+            log.exception("send queue is full, retry message later")
+            retval = False
+        return retval
 
     def send_xml(self, data, mask=None, timeout=RESPONSE_TIMEOUT, priority=5):
         """
