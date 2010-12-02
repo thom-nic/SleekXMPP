@@ -193,6 +193,7 @@ class XMLStream(object):
         self.stream_header = "<stream>"
         self.stream_footer = "</stream>"
 
+        self.reconnect_lock = threading.Lock()
         self.stop = threading.Event()
         self.stream_end_event = threading.Event()
         self.stream_end_event.set()
@@ -200,7 +201,7 @@ class XMLStream(object):
         self.session_started_event.clear()
         self.event_queue = queue.Queue()
         self.send_queue = queue.PriorityQueue()
-        self.scheduler = Scheduler(self.event_queue, self.stop)
+        self.scheduler = Scheduler(self.state)
 
         self.namespace_map = {}
 
@@ -354,25 +355,21 @@ class XMLStream(object):
         if reconnect:
             self.reconnect()
         else:
+            self.auto_reconnect = False
             self.state.transition('connected', 'disconnected', wait=0.0,
-                              func=self._disconnect, args=(reconnect,))
+                              func=self._disconnect)
         
-    def _disconnect(self, reconnect=False):
+    def _disconnect(self):
         # Send the end of stream marker.
         self.sendStreamPacket(self.stream_footer)
         # Wait for confirmation that the stream was
         # closed in the other direction.
-        if not reconnect:
-            self.auto_reconnect = False
         self.stream_end_event.wait(4)
-        self.stop.set()
         self.session_started_event.clear()
         try:
             self.socket.shutdown(Socket.SHUT_RDWR)
             self.socket.close()
             self.filesocket.close()
-            for thread in self.__thread:
-                thread.join(.1)
                 
         except Socket.error as serr:
             pass
@@ -387,16 +384,19 @@ class XMLStream(object):
         """
         Reset the stream's state and reconnect to the server.
         """
-        log.debug("reconnecting...")
-        self.state.transition('connected', 'disconnected', wait=2.0,
-                              func=self._disconnect, args=(False,))
-        time.sleep(3)
-        log.debug("connecting...")
-        #retval = self.state.transition('disconnected', 'connected',
-        #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
-        retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
-        if retval:
-            self.process(threaded=True)
+        if self.reconnect_lock.acquire(False):
+            log.debug("reconnecting...")
+            self.state.transition('connected', 'disconnected', wait=2.0,
+                                  func=self._disconnect)
+            log.debug("connecting...")
+            #retval = self.state.transition('disconnected', 'connected',
+            #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
+            #time.sleep(30)
+            retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
+            self.reconnect_lock.release()
+        else:
+            log.debug("already reconnecting... can't acquire reconnect_lock")
+            retval = False
         return retval
         
     def set_socket(self, socket, ignore=False):
@@ -756,25 +756,25 @@ class XMLStream(object):
         Processing will continue after any recoverable errors
         if reconnections are allowed.
         """
-        firstrun = True
 
         # The body of this loop will only execute once per connection.
         # Additional passes will be made only if an error occurs and
         # reconnecting is permitted.
-        while firstrun or (self.auto_reconnect and not self.stop.isSet()):
-            firstrun = False
+        while True:
             try:
-                if self.is_client:
-                    self.sendStreamPacket(self.stream_header)
                 # The call to self.__read_xml will block and prevent
                 # the body of the loop from running until a disconnect
                 # occurs. After any reconnection, the stream header will
                 # be resent and processing will resume.
-                while not self.stop.isSet() and self.__read_xml():
+                while not self.stop.isSet():
+                    #Only process the stream while connected to the server
+                    if not self.state.ensure('connected', wait=0.1, block_on_transition=True):
+                        continue 
                     # Ensure the stream header is sent for any
                     # new connections.
-                    if self.is_client:
+                    if not self.session_started_event.isSet():
                         self.sendStreamPacket(self.stream_header)
+                    self.__read_xml()
             except KeyboardInterrupt:
                 log.debug("Keyboard Escape Detected in _process")
                 self.stop.set()
@@ -793,10 +793,17 @@ class XMLStream(object):
             except:
                 if not self.stop.isSet():
                     log.exception('Connection error.')
-            if not self.stop.isSet() and self.auto_reconnect:
-                self.disconnect(reconnect=True)
+            
+            log.debug(self.stop.isSet())
+            log.debug(self.auto_reconnect)
+            if not self.stop.isSet():
+                if self.auto_reconnect:
+                    self.reconnect()
+                else:
+                    continue
             else:
                 self.disconnect()
+                break
         
     def __read_xml(self):
         """
@@ -999,13 +1006,15 @@ class XMLStream(object):
                     self.socket.send(data.encode('utf-8'))
                 except:
                     log.warning("Failed to send %s" % data)
-                    self.disconnect(self.auto_reconnect)
-                    
+                    self.reconnect()
+            log.debug('out of send thread')
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _send_thread")
+            self.stop.set();
             self.disconnect()
             return
         except SystemExit:
+            self.stop.set();
             self.disconnect()
             return
         
@@ -1021,4 +1030,8 @@ class XMLStream(object):
                 return waitfor.wait()
         except:
             logging.warning("Failed to send %s" % data)
-            self.disconnect(self.auto_reconnect)
+            if self.auto_reconnect:
+                self.reconnect()
+            else:
+                self.disconnect(self)
+            
