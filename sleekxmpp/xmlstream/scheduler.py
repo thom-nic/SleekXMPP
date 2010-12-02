@@ -199,9 +199,19 @@ class Scheduler(object):
             qpointer -- A pointer to an event queue for queuing callback
                         execution instead of executing immediately.
         """
+        for task in self.schedule:
+            if task.name == name:
+                raise UniqueKeyConstraint("Key %s already exists" %name)
+            
         self.addq.put(Task(name, seconds, callback, args,
                            kwargs, repeat, qpointer))
 
     def quit(self):
         """Shutdown the scheduler."""
         self.run = False
+
+class UniqueKeyConstraint(Exception):
+    def __init__(self, value):
+        self.parameter = value
+    def __str__(self):
+        return repr(self.parameter)
