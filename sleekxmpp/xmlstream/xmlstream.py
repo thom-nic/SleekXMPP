@@ -202,7 +202,7 @@ class XMLStream(object):
         self.session_started_event.clear()
         self.event_queue = queue.Queue()
         self.send_queue = queue.PriorityQueue(500)
-        self.scheduler = Scheduler(self.state)
+        self.scheduler = Scheduler(self.stop)
 
         self.namespace_map = {}
 
@@ -1012,7 +1012,8 @@ class XMLStream(object):
                     self.socket.send(data.encode('utf-8'))
                 except:
                     log.warning("Failed to send %s" % data)
-                    self.reconnect()
+                    if not self.stop.isSet():
+                        self.reconnect()
             log.debug('out of send thread')
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _send_thread")

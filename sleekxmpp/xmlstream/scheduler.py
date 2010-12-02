@@ -107,7 +107,7 @@ class Scheduler(object):
         quit    -- Stop the scheduler.
     """
 
-    def __init__(self, state):
+    def __init__(self, stopevent):
         """
         Create a new scheduler.
 
@@ -118,7 +118,7 @@ class Scheduler(object):
         self.schedule = []
         self.thread = None
         self.run = False
-        self.state = state
+        self.stop = stopevent
 
     def process(self, threaded=True):
         """
@@ -139,7 +139,7 @@ class Scheduler(object):
         """Process scheduled tasks."""
         self.run = True
         try:
-            while self.run:
+            while self.run and not self.stop.isSet():
                 wait = 1
                 updated = False
                 if self.schedule:
