@@ -419,9 +419,9 @@ class XMLStream(object):
             # version to work around a broken implementation in
             # Python 2.x.
             if sys.version_info < (3, 0):
-                self.filesocket = FileSocket(self.socket, runningEvent=self.stop)
+                self.filesocket = FileSocket(self.socket, statemachine=self.state)
             else:
-                self.filesocket = self.socket.makefile('rb', 0, runningEvent=self.stop)
+                self.filesocket = self.socket.makefile('rb', 0, runningEvent=self.state)
             if not ignore:
                 self.state._set_state('connected')
 
