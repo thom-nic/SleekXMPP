@@ -17,10 +17,13 @@ import threading
 import time
 import types
 import random
+from Queue import Full
 try:
     import queue
 except ImportError:
     import Queue as queue
+    
+import dns.resolver
 
 from sleekxmpp.thirdparty.statemachine import StateMachine
 from sleekxmpp.xmlstream import Scheduler, tostring
@@ -191,14 +194,15 @@ class XMLStream(object):
         self.stream_header = "<stream>"
         self.stream_footer = "</stream>"
 
+        self.reconnect_lock = threading.Lock()
         self.stop = threading.Event()
         self.stream_end_event = threading.Event()
         self.stream_end_event.set()
         self.session_started_event = threading.Event()
         self.session_started_event.clear()
         self.event_queue = queue.Queue()
-        self.send_queue = queue.PriorityQueue()
-        self.scheduler = Scheduler(self.event_queue, self.stop)
+        self.send_queue = queue.PriorityQueue(500)
+        self.scheduler = Scheduler(self.stop)
 
         self.namespace_map = {}
 
@@ -265,7 +269,8 @@ class XMLStream(object):
             self.use_ssl = use_ssl
         if use_tls is not None:
             self.use_tls = use_tls
-
+            
+        
         # Repeatedly attempt to connect until a successful connection
         # is established.
         delay = 1.0 # reconnection delay
@@ -282,6 +287,31 @@ class XMLStream(object):
 
     def _connect(self):
         self.stop.clear()
+        #do the srv lookup
+        try:
+            xmpp_srv = "_xmpp-client._tcp.%s" % self.address[0]
+            answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
+            log.debug("No appropriate SRV record found." + \
+                          " Using %s" %self.address[0])
+        else:
+            # Pick a random server, weighted by priority.
+            addresses = {}
+            intmax = 0
+            for answer in answers:
+                intmax += answer.priority
+                addresses[intmax] = (answer.target.to_text()[:-1],
+                                     answer.port)
+            #python3 returns a generator for dictionary keys
+            priorities = [x for x in addresses.keys()]
+            priorities.sort()
+
+            picked = random.randint(0, intmax)
+            for priority in priorities:
+                if picked <= priority:
+                    self.address = (addresses[priority], self.address[1])
+                    break
+
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
@@ -326,25 +356,21 @@ class XMLStream(object):
         if reconnect:
             self.reconnect()
         else:
+            self.auto_reconnect = False
             self.state.transition('connected', 'disconnected', wait=0.0,
-                              func=self._disconnect, args=(reconnect,))
+                              func=self._disconnect)
         
-    def _disconnect(self, reconnect=False):
+    def _disconnect(self):
         # Send the end of stream marker.
         self.sendStreamPacket(self.stream_footer)
         # Wait for confirmation that the stream was
         # closed in the other direction.
-        if not reconnect:
-            self.auto_reconnect = False
         self.stream_end_event.wait(4)
-        self.stop.set()
         self.session_started_event.clear()
         try:
             self.socket.shutdown(Socket.SHUT_RDWR)
             self.socket.close()
             self.filesocket.close()
-            for thread in self.__thread:
-                thread.join(.1)
                 
         except Socket.error as serr:
             pass
@@ -359,16 +385,19 @@ class XMLStream(object):
         """
         Reset the stream's state and reconnect to the server.
         """
-        log.debug("reconnecting...")
-        self.state.transition('connected', 'disconnected', wait=2.0,
-                              func=self._disconnect, args=(False,))
-        time.sleep(3)
-        log.debug("connecting...")
-        #retval = self.state.transition('disconnected', 'connected',
-        #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
-        retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
-        if retval:
-            self.process(threaded=True)
+        if self.reconnect_lock.acquire(False):
+            log.debug("reconnecting...")
+            self.state.transition('connected', 'disconnected', wait=2.0,
+                                  func=self._disconnect)
+            log.debug("connecting...")
+            #retval = self.state.transition('disconnected', 'connected',
+            #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
+            #time.sleep(30)
+            retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
+            self.reconnect_lock.release()
+        else:
+            log.debug("already reconnecting... can't acquire reconnect_lock")
+            retval = False
         return retval
         
     def set_socket(self, socket, ignore=False):
@@ -390,9 +419,9 @@ class XMLStream(object):
             # version to work around a broken implementation in
             # Python 2.x.
             if sys.version_info < (3, 0):
-                self.filesocket = FileSocket(self.socket, runningEvent=self.stop)
+                self.filesocket = FileSocket(self.socket, statemachine=self.state)
             else:
-                self.filesocket = self.socket.makefile('rb', 0, runningEvent=self.stop)
+                self.filesocket = self.socket.makefile('rb', 0, runningEvent=self.state)
             if not ignore:
                 self.state._set_state('connected')
 
@@ -666,8 +695,13 @@ class XMLStream(object):
         Arguments:
             data -- Any string value.
         """
-        self.send_queue.put((priority, data))
-        return True
+        retval = True
+        try: 
+            self.send_queue.put((priority, data), block=True, timeout=1)
+        except Full:
+            log.exception("send queue is full, retry message later")
+            retval = False
+        return retval
 
     def send_xml(self, data, mask=None, timeout=RESPONSE_TIMEOUT, priority=5):
         """
@@ -728,25 +762,25 @@ class XMLStream(object):
         Processing will continue after any recoverable errors
         if reconnections are allowed.
         """
-        firstrun = True
 
         # The body of this loop will only execute once per connection.
         # Additional passes will be made only if an error occurs and
         # reconnecting is permitted.
-        while firstrun or (self.auto_reconnect and not self.stop.isSet()):
-            firstrun = False
+        while True:
             try:
-                if self.is_client:
-                    self.sendStreamPacket(self.stream_header)
                 # The call to self.__read_xml will block and prevent
                 # the body of the loop from running until a disconnect
                 # occurs. After any reconnection, the stream header will
                 # be resent and processing will resume.
-                while not self.stop.isSet() and self.__read_xml():
+                while not self.stop.isSet():
+                    #Only process the stream while connected to the server
+                    if not self.state.ensure('connected', wait=0.1, block_on_transition=True):
+                        continue 
                     # Ensure the stream header is sent for any
                     # new connections.
-                    if self.is_client:
+                    if not self.session_started_event.isSet():
                         self.sendStreamPacket(self.stream_header)
+                    self.__read_xml()
             except KeyboardInterrupt:
                 log.debug("Keyboard Escape Detected in _process")
                 self.stop.set()
@@ -758,15 +792,24 @@ class XMLStream(object):
                 #log.exception('Socket Timeout... Continuing')
                 if e.errno == None: #FIXME
                     continue
+                else:
+                    log.exception('ssl socket error')
             except Socket.error:
                 log.exception('Socket Error')
             except:
                 if not self.stop.isSet():
                     log.exception('Connection error.')
-            if not self.stop.isSet() and self.auto_reconnect:
-                self.disconnect(reconnect=True)
+            
+            log.debug(self.stop.isSet())
+            log.debug(self.auto_reconnect)
+            if not self.stop.isSet():
+                if self.auto_reconnect:
+                    self.reconnect()
+                else:
+                    continue
             else:
                 self.disconnect()
+                break
         
     def __read_xml(self):
         """
@@ -969,18 +1012,22 @@ class XMLStream(object):
                     self.socket.send(data.encode('utf-8'))
                 except:
                     log.warning("Failed to send %s" % data)
-                    self.disconnect(self.auto_reconnect)
-                    
+                    if not self.stop.isSet():
+                        self.reconnect()
+            log.debug('out of send thread')
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _send_thread")
+            self.stop.set();
             self.disconnect()
             return
         except SystemExit:
+            self.stop.set();
             self.disconnect()
             return
         
     def sendStreamPacket(self, data, block=False):
         try:
+            log.debug("SEND: %s" % data)
             if not block:
                 self.socket.send(data.encode('utf-8'))
             else:
@@ -990,4 +1037,8 @@ class XMLStream(object):
                 return waitfor.wait()
         except:
             logging.warning("Failed to send %s" % data)
-            self.disconnect(self.auto_reconnect)
+            if self.auto_reconnect:
+                self.reconnect()
+            else:
+                self.disconnect(self)
+            

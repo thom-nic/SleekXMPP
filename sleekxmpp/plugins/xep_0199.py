@@ -43,6 +43,7 @@ class xep_0199(base.base_plugin):
         iq = self.xmpp.makeIqResult(xml.get('id', 'unknown'))
         iq.attrib['to'] = xml.get('from', self.xmpp.boundjid.domain)
         self.xmpp.send(iq)
+    
 
     def sendPing(self, jid, timeout = 30):
         """ sendPing(jid, timeout)
