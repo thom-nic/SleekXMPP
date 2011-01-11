@@ -287,6 +287,22 @@ class XMLStream(object):
 
     def _connect(self):
         self.stop.clear()
+
+        # call res_init to refresh name resolution is necessary:
+        try:
+            Socket.getaddrinfo(self.address[0], self.address[1])
+        except Socket.gaierror as e:
+            if e.errno == 2: # name resolution error
+                logging.warn("Name resolution error; calling res_init()")
+                try:
+                    import ctypes
+                    libresolv = ctypes.CDLL('libresolv.so.2')
+                    result = getattr(libresolv,'__res_init')()
+                    if result != 0:
+                        logging.warn( "res_init() call returned " + result )
+                except:
+                    logging.exception( "Error while calling res_init" )
+
         #do the srv lookup
         try:
             xmpp_srv = "_xmpp-client._tcp.%s" % self.address[0]
