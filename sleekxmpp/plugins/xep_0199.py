@@ -30,12 +30,16 @@ class xep_0199(base.base_plugin):
         self.xmpp.plugin['xep_0030'].add_feature('urn:xmpp:ping')
 
     def handler_pingserver(self, xml):
-        self.xmpp.schedule("xep-0119 ping", float(self.config.get('frequency', 300)), self.scheduled_ping, repeat=True)
+        try:
+            self.xmpp.schedule("xep-0119 ping", float(self.config.get('frequency', 300)), 
+                    self.scheduled_ping, repeat=True)
+        except UniqueKeyConstraint:
+            log.debug( "Ping already scheduled" )
 
     def scheduled_ping(self):
         log.debug("pinging...")
         if not self.xmpp.stop.isSet() and self.sendPing(self.xmpp.boundjid.domain, 
-        	    self.config.get('timeout', 30)) is False:
+                self.config.get('timeout', 30)) is False:
             log.debug("Did not recieve ping back in time.  Requesting Reconnect.")
             self.xmpp.event('doreconnect')
 
