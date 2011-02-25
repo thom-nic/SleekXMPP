@@ -196,6 +196,7 @@ class XMLStream(object):
 
         self.reconnect_lock = threading.Lock()
         self.stop = threading.Event()
+        self.stop.clear()
         self.stream_end_event = threading.Event()
         self.stream_end_event.set()
         self.session_started_event = threading.Event()
@@ -276,7 +277,7 @@ class XMLStream(object):
         delay = 1.0 # reconnection delay
         connected = self.state.transition('disconnected', 'connected',
                                           func=self._connect)
-        while reattempt and not connected:
+        while reattempt and not connected and not self.stop.isSet():
             delay = min(delay * RECONNECT_QUIESCE_FACTOR, RECONNECT_MAX_DELAY)
             delay = random.normalvariate(delay, delay * RECONNECT_QUIESCE_JITTER)
             logging.debug('Waiting %.3fs until next reconnect attempt...', delay)
@@ -286,8 +287,6 @@ class XMLStream(object):
         return connected
 
     def _connect(self):
-        self.stop.clear()
-
         # call res_init to refresh name resolution is necessary:
         try:
             Socket.getaddrinfo(self.address[0], self.address[1])
