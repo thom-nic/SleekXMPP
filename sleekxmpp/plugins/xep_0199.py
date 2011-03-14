@@ -7,6 +7,7 @@
 """
 from xml.etree import cElementTree as ET
 from . import base
+from ..xmlstream.scheduler import UniqueKeyConstraint
 import time
 import logging
 
