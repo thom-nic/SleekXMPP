@@ -231,7 +231,7 @@ class ClientXMPP(BaseXMPP):
                                        'subscription': subscription,
                                        'groups': groups}}
         response = iq.send()
-        return response['type'] == 'result'
+#        return response['type'] == 'result'
 
     def del_roster_item(self, jid):
         """
@@ -247,7 +247,7 @@ class ClientXMPP(BaseXMPP):
         """Request the roster from the server."""
         iq = self.Iq()._set_stanza_values({'type': 'get'}).enable('roster')
         response = iq.send()
-        self._handle_roster(response, request=True)
+#        self._handle_roster(response, request=True)
 
     def _handle_stream_features(self, features):
         """
@@ -461,7 +461,7 @@ class ClientXMPP(BaseXMPP):
             request -- Indicates if this stanza is a response
                        to a request for the roster.
         """
-        if type(Iq) != Iq:
+        if iq is False:
             logging.warn("Timeout waiting for roster!!")
             return
 
