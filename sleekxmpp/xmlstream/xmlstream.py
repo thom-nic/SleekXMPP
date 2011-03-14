@@ -30,7 +30,7 @@ from sleekxmpp.thirdparty.statemachine import StateMachine
 from sleekxmpp.xmlstream import Scheduler, tostring
 from sleekxmpp.xmlstream.stanzabase import StanzaBase, ET
 from sleekxmpp.xmlstream.handler import Waiter, XMLCallback
-from sleekxmpp.xmlstream.matcher import MatchXMLMask
+from sleekxmpp.xmlstream.matcher import MatchXMLMask, MatcherId
 
 # In Python 2.x, file socket objects are broken. A patched socket
 # wrapper is provided for this case in filesocket.py.
@@ -1096,7 +1096,7 @@ class XMLStream(object):
                 self.socket.send(tostring(data.xml).encode('utf-8'))
                 return waitfor.wait()
         except:
-            logging.warning("Failed to send %s" % data)
+            logging.exception("Failed to send %s" % data)
             if self.auto_reconnect:
                 self.reconnect()
             else:
