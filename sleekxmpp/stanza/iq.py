@@ -193,10 +193,10 @@ class Iq(RootStanza):
         elif block and self['type'] in ('get', 'set'):
             waitfor = Waiter('IqWait_%s' % self['id'], MatcherId(self['id']))
             self.stream.register_handler(waitfor)
-            StanzaBase.send(self,priority)
+            StanzaBase.send(self,priority=priority)
             return waitfor.wait(timeout)
         else:
-            return StanzaBase.send(self,priority)
+            return StanzaBase.send(self,priority=priority)
 
     def _set_stanza_values(self, values):
         """

@@ -127,17 +127,18 @@ class Scheduler(object):
             threaded -- Indicates if the scheduler should execute in its own
                         thread. Defaults to True.
         """
-        self.stop.clear()
+#        self.stop.clear()
         if threaded:
             self.thread = threading.Thread(name='scheduler_process',
                                            target=self._process)
+            self.thread.daemon = True
             self.thread.start()
         else:
             self._process()
 
     def _process(self):
         """Process scheduled tasks."""
-        while self.stop.is_set():
+        while not self.stop.is_set():
             wait = 1
             updated = False
             if self.schedule:

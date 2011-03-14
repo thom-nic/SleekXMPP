@@ -737,14 +737,13 @@ class XMLStream(object):
 
         if hasattr(mask, 'xml'):
             mask = mask.xml
-        data = str(data)
+
         if mask is not None:
-            from sleekxmpp.xmlstream.matcher import MatchXMLMask
             log.warning("Use of send mask waiters is deprecated.")
             wait_for = Waiter("SendWait_%s" % self.new_id(),
                               MatchXMLMask(mask))
             self.register_handler(wait_for)
-        self.send_raw(data, priority)
+        self.send_raw(str(data), priority)
         if mask is not None:
             return wait_for.wait(timeout)
 
@@ -757,7 +756,7 @@ class XMLStream(object):
         """
         retval = True
         try: 
-            self.send_queue.put((priority, data), block=True, timeout=1)
+            self.send_queue.put_nowait((priority, data))
         except Full:
             log.exception("send queue is full, retry message later")
             retval = False
@@ -863,8 +862,8 @@ class XMLStream(object):
                 if not self.stop.isSet():
                     log.exception('Connection error.')
             
-            log.debug("Stopping: " + self.stop.isSet())
-            log.debug("Auto reconnect: " + self.auto_reconnect)
+            log.debug("Stopping: %s", self.stop.isSet())
+            log.debug("Auto reconnect: %s", self.auto_reconnect)
             if self.stop.is_set():
                 self.event('killed', direct=True)
                 self.disconnect()
@@ -1057,10 +1056,10 @@ class XMLStream(object):
         Extract stanzas from the send queue and send them on the stream.
         """
         try:
-            while not self.stop.isSet():
+            while not self.stop.is_set():
                 #if the session hasn't started, don't start sending queued messages
-                if not self.session_started_event.wait(0.1):
-                    continue
+                self.session_started_event.wait(WAIT_TIMEOUT)
+                if not self.session_started_event.is_set(): continue
                 try:
                     data = self.send_queue.get(True, WAIT_TIMEOUT)[1]
                 except queue.Empty:

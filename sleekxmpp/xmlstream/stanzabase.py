@@ -1186,7 +1186,7 @@ class StanzaBase(ElementBase):
 
     def send(self, priority=5):
         """Queue the stanza to be sent on the XML stream."""
-        self.stream.sendRaw(self.__str__(), priority)
+        return self.stream.send(self, priority=priority)
 
     def __copy__(self):
         """
