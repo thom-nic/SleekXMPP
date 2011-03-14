@@ -461,6 +461,10 @@ class ClientXMPP(BaseXMPP):
             request -- Indicates if this stanza is a response
                        to a request for the roster.
         """
+        if type(Iq) != Iq:
+            logging.warn("Timeout waiting for roster!!")
+            return
+
         if iq['type'] == 'set' or (iq['type'] == 'result' and request):
             for jid in iq['roster']['items']:
                 if not jid in self.roster:
