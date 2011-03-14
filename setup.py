@@ -38,13 +38,21 @@ CLASSIFIERS      = [ 'Intended Audience :: Developers',
                    ]
 
 packages     = [ 'sleekxmpp',
-                 'sleekxmpp/plugins',
                  'sleekxmpp/stanza',
                  'sleekxmpp/test',
                  'sleekxmpp/xmlstream',
                  'sleekxmpp/xmlstream/matcher',
                  'sleekxmpp/xmlstream/handler',
                  'sleekxmpp/thirdparty',
+                 'sleekxmpp/plugins',
+                 'sleekxmpp/plugins/xep_0009',
+                 'sleekxmpp/plugins/xep_0009/stanza',
+                 'sleekxmpp/plugins/xep_0030',
+                 'sleekxmpp/plugins/xep_0030/stanza',
+                 'sleekxmpp/plugins/xep_0059',
+                 'sleekxmpp/plugins/xep_0085',
+                 'sleekxmpp/plugins/xep_0092',
+                 'sleekxmpp/plugins/xep_0199',
                  ]
 
 if sys.version_info < (3, 0):

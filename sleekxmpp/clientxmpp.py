@@ -69,13 +69,6 @@ class ClientXMPP(BaseXMPP):
         """
         BaseXMPP.__init__(self, 'jabber:client')
 
-        # To comply with PEP8, method names now use underscores.
-        # Deprecated method names are re-mapped for backwards compatibility.
-        self.updateRoster = self.update_roster
-        self.delRosterItem = self.del_roster_item
-        self.getRoster = self.get_roster
-        self.registerFeature = self.register_feature
-
         self.set_jid(jid)
         self.password = password
         self.escape_quotes = escape_quotes
@@ -149,7 +142,7 @@ class ClientXMPP(BaseXMPP):
             log.debug("Session start has taken more than 15 seconds")
             self.disconnect(reconnect=self.auto_reconnect)
 
-    def connect(self, address=tuple()):
+    def connect(self, address=tuple(), reattempt=True):
         """
         Connect to the XMPP server.
 
@@ -158,7 +151,9 @@ class ClientXMPP(BaseXMPP):
         will be used.
 
         Arguments:
-            address -- A tuple containing the server's host and port.
+            address   -- A tuple containing the server's host and port.
+            reattempt -- If True, reattempt the connection if an
+                         error occurs.
         """
         self.session_started_event.clear()
         if not address or len(address) < 2:
@@ -172,12 +167,13 @@ class ClientXMPP(BaseXMPP):
                 log.debug("Since no address is supplied," + \
                               "attempting SRV lookup.")
                 try:
-                    
-                    xmpp_srv = "_xmpp-client._tcp.%s" % self.server
+                    xmpp_srv = "_xmpp-client._tcp.%s" % self.boundjid.host
                     answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
                 except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
                     log.debug("No appropriate SRV record found." + \
                                   " Using JID server name.")
+                except (dns.exception.Timeout,):
+                    log.debug("DNS resolution timed out.")
                 else:
                     # Pick a random server, weighted by priority.
 
@@ -201,7 +197,8 @@ class ClientXMPP(BaseXMPP):
             # If all else fails, use the server from the JID.
             address = (self.boundjid.host, 5222)
 
-        return XMLStream.connect(self, address[0], address[1], use_tls=True)
+        return XMLStream.connect(self, address[0], address[1],
+                                 use_tls=True, reattempt=reattempt)
 
     def register_feature(self, mask, pointer, breaker=False):
         """
@@ -497,3 +494,12 @@ def md5digest(data):
         import md5
         md5 = md5.new(data)
     return md5.hexdigest()
+
+
+# To comply with PEP8, method names now use underscores.
+# Deprecated method names are re-mapped for backwards compatibility.
+ClientXMPP.updateRoster = ClientXMPP.update_roster
+ClientXMPP.delRosterItem = ClientXMPP.del_roster_item
+ClientXMPP.getRoster = ClientXMPP.get_roster
+ClientXMPP.registerFeature = ClientXMPP.register_feature
+

@@ -139,7 +139,8 @@ class Scheduler(object):
         """Process scheduled tasks."""
         self.run = True
         try:
-            while self.run and not self.stop.isSet():
+            while self.run and (self.parentstop is None or \
+                                not self.parentstop.isSet()):
                 wait = 1
                 updated = False
                 if self.schedule:
@@ -147,6 +148,21 @@ class Scheduler(object):
                 try:
                     if wait <= 0.0:
                         newtask = self.addq.get(False)
+                    else:
+                        if wait >= 3.0:
+                            wait = 3.0
+                        newtask = self.addq.get(True, wait)
+                except queue.Empty:
+                    cleanup = []
+                    for task in self.schedule:
+                        if time.time() >= task.next:
+                            updated = True
+                            if not task.run():
+                                cleanup.append(task)
+                        else:
+                            break
+                    for task in cleanup:
+                        x = self.schedule.pop(self.schedule.index(task))
                     else:
                         if wait >= 3.0:
                             wait = 3.0

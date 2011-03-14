@@ -10,6 +10,7 @@ from __future__ import with_statement, unicode_literals
 
 import copy
 import logging
+import signal
 import socket as Socket
 import ssl
 import sys
@@ -28,8 +29,8 @@ import dns.resolver
 from sleekxmpp.thirdparty.statemachine import StateMachine
 from sleekxmpp.xmlstream import Scheduler, tostring
 from sleekxmpp.xmlstream.stanzabase import StanzaBase, ET
-from sleekxmpp.xmlstream.handler import Waiter
-from sleekxmpp.xmlstream.matcher import MatcherId
+from sleekxmpp.xmlstream.handler import Waiter, XMLCallback
+from sleekxmpp.xmlstream.matcher import MatchXMLMask
 
 # In Python 2.x, file socket objects are broken. A patched socket
 # wrapper is provided for this case in filesocket.py.
@@ -104,6 +105,8 @@ class XMLStream(object):
         ssl_support   -- Indicates if a SSL library is available for use.
         ssl_version   -- The version of the SSL protocol to use.
                          Defaults to ssl.PROTOCOL_TLSv1.
+        ca_certs      -- File path to a CA certificate to verify the
+                         server's identity.
         state         -- A state machine for managing the stream's
                          connection state.
         stream_footer -- The start tag and any attributes for the stream's
@@ -158,21 +161,11 @@ class XMLStream(object):
             port   -- The port to use for the connection.
                       Defaults to 0.
         """
-        # To comply with PEP8, method names now use underscores.
-        # Deprecated method names are re-mapped for backwards compatibility.
-        self.startTLS = self.start_tls
-        self.registerStanza = self.register_stanza
-        self.removeStanza = self.remove_stanza
-        self.registerHandler = self.register_handler
-        self.removeHandler = self.remove_handler
-        self.setSocket = self.set_socket
-        self.sendRaw = self.send_raw
-        self.getId = self.get_id
-        self.getNewId = self.new_id
-        self.sendXML = self.send_xml
-
         self.ssl_support = SSL_SUPPORT
         self.ssl_version = ssl.PROTOCOL_TLSv1
+        self.ca_certs = None
+
+        self.response_timeout = RESPONSE_TIMEOUT
 
         self.state = StateMachine(('disconnected', 'connected'))
         self.state._set_state('disconnected')
@@ -205,7 +198,7 @@ class XMLStream(object):
         self.send_queue = queue.PriorityQueue(500)
         self.scheduler = Scheduler(self.stop)
 
-        self.namespace_map = {}
+        self.namespace_map = {StanzaBase.xml_ns: 'xml'}
 
         self.__thread = {}
         self.__root_stanza = []
@@ -218,14 +211,53 @@ class XMLStream(object):
 
         self.auto_reconnect = True
         self.is_client = False
-        
-    def _handle_kill(self, signum, frame):
+
+    def use_signals(self, signals=None):
         """
-        Capture kill event and disconnect cleanly after first
-        spawning the "killed" event.
+        Register signal handlers for SIGHUP and SIGTERM, if possible,
+        which will raise a "killed" event when the application is
+        terminated.
+
+        If a signal handler already existed, it will be executed first,
+        before the "killed" event is raised.
+
+        Arguments:
+            signals -- A list of signal names to be monitored.
+                       Defaults to ['SIGHUP', 'SIGTERM'].
         """
-        self.event("killed", direct=True)
-        self.disconnect()
+        if signals is None:
+            signals = ['SIGHUP', 'SIGTERM']
+
+        existing_handlers = {}
+        for sig_name in signals:
+            if hasattr(signal, sig_name):
+                sig = getattr(signal, sig_name)
+                handler = signal.getsignal(sig)
+                if handler:
+                    existing_handlers[sig] = handler
+
+        def handle_kill(signum, frame):
+            """
+            Capture kill event and disconnect cleanly after first
+            spawning the "killed" event.
+            """
+
+            if signum in existing_handlers and \
+                   existing_handlers[signum] != handle_kill:
+                existing_handlers[signum](signum, frame)
+
+            self.event("killed", direct=True)
+            self.disconnect()
+
+        try:
+            for sig_name in signals:
+                if hasattr(signal, sig_name):
+                    sig = getattr(signal, sig_name)
+                    signal.signal(sig, handle_kill)
+            self.__signals_installed = True
+        except:
+            log.debug("Can not set interrupt signal handlers. " + \
+                      "SleekXMPP is not running from a main thread.")
 
     def new_id(self):
         """
@@ -330,11 +362,16 @@ class XMLStream(object):
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
-            logging.debug("Socket Wrapped for SSL")
-            cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
+            log.debug("Socket Wrapped for SSL")
+            if self.ca_certs is None:
+                cert_policy = ssl.CERT_NONE
+            else:
+                cert_policy = ssl.CERT_REQUIRED
+
             ssl_socket = ssl.wrap_socket(self.socket,
-                                         ca_certs=self.ca_certs, 
-                                         cert_reqs=cert_policy)
+                                         ca_certs=self.ca_certs,
+                                         certs_reqs=cert_policy)
+
             if hasattr(self.socket, 'socket'):
                 # We are using a testing socket, so preserve the top
                 # layer of wrapping.
@@ -351,6 +388,7 @@ class XMLStream(object):
             return True
         except Socket.error as serr:
             error_msg = "Could not connect to %s:%s. Socket Error #%s: %s"
+            self.event('socket_error', serr)
             log.error(error_msg % (self.address[0], self.address[1],
                                        serr.errno, serr.strerror))
             time.sleep(1)
@@ -388,7 +426,7 @@ class XMLStream(object):
             self.filesocket.close()
                 
         except Socket.error as serr:
-            pass
+            self.event('socket_error', serr)
         finally:
             #clear your application state
             self.event("disconnected", direct=True)
@@ -448,13 +486,19 @@ class XMLStream(object):
         to be restarted.
         """
         if self.ssl_support:
-            logging.info("Negotiating TLS")
-            cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
+            log.info("Negotiating TLS")
+            log.info("Using SSL version: %s" % str(self.ssl_version))
+            if self.ca_certs is None:
+                cert_policy = ssl.CERT_NONE
+            else:
+                cert_policy = ssl.CERT_REQUIRED
+
             ssl_socket = ssl.wrap_socket(self.socket,
-                                         ssl_version=ssl.PROTOCOL_TLSv1,
+                                         ssl_version=self.ssl_version,
                                          do_handshake_on_connect=False,
                                          ca_certs=self.ca_certs,
                                          cert_reqs=cert_policy)
+
             if hasattr(self.socket, 'socket'):
                 # We are using a testing socket, so preserve the top
                 # layer of wrapping.
@@ -527,8 +571,6 @@ class XMLStream(object):
         """
         # To prevent circular dependencies, we must load the matcher
         # and handler classes here.
-        from sleekxmpp.xmlstream.matcher import MatchXMLMask
-        from sleekxmpp.xmlstream.handler import XMLCallback
 
         if name is None:
             name = 'add_handler_%s' % self.getNewId()
@@ -675,7 +717,7 @@ class XMLStream(object):
         """
         return xml
 
-    def send(self, data, mask=None, timeout=RESPONSE_TIMEOUT, priority=5):
+    def send(self, data, mask=None, timeout=None, priority=5):
         """
         A wrapper for send_raw for sending stanza objects.
 
@@ -690,6 +732,9 @@ class XMLStream(object):
             timeout -- Time in seconds to wait for a response before
                        continuing. Defaults to RESPONSE_TIMEOUT.
         """
+        if timeout is None:
+            timeout = self.response_timeout
+
         if hasattr(mask, 'xml'):
             mask = mask.xml
         data = str(data)
@@ -718,7 +763,7 @@ class XMLStream(object):
             retval = False
         return retval
 
-    def send_xml(self, data, mask=None, timeout=RESPONSE_TIMEOUT, priority=5):
+    def send_xml(self, data, mask=None, timeout=None, priority=5):
         """
         Send an XML object on the stream, and optionally wait
         for a response.
@@ -732,6 +777,8 @@ class XMLStream(object):
             timeout -- Time in seconds to wait for a response before
                        continuing. Defaults to RESPONSE_TIMEOUT.
         """
+        if timeout is None:
+            timeout = self.response_timeout
         return self.send(tostring(data), mask, timeout, priority)
 
     def process(self, threaded=True):
@@ -750,6 +797,7 @@ class XMLStream(object):
                         Event handlers and the send queue will be threaded
                         regardless of this parameter's value.
         """
+        self._thread_excepthook()
         self.scheduler.process(threaded=True)
 
         def start_thread(name, target):
@@ -802,14 +850,14 @@ class XMLStream(object):
             except SystemExit:
                 log.debug("SystemExit in _process")
                 self.stop.set()
-                self.scheduler.run = False
             except ssl.SSLError, e:
                 #log.exception('Socket Timeout... Continuing')
                 if e.errno == None: #FIXME
                     continue
                 else:
                     log.exception('ssl socket error')
-            except Socket.error:
+            except Socket.error as serr:
+                self.event('socket_error', serr)
                 log.exception('Socket Error')
             except:
                 if not self.stop.isSet():
@@ -823,6 +871,7 @@ class XMLStream(object):
                 else:
                     continue
             else:
+                self.event('killed', direct=True)
                 self.disconnect()
                 break
         
@@ -880,7 +929,8 @@ class XMLStream(object):
             default_ns = self.default_ns
         stanza_type = StanzaBase
         for stanza_class in self.__root_stanza:
-            if xml.tag == "{%s}%s" % (default_ns, stanza_class.name):
+            if xml.tag == "{%s}%s" % (default_ns, stanza_class.name) or \
+               xml.tag == stanza_class.tag_name():
                 stanza_type = stanza_class
                 break
         stanza = stanza_type(self, xml)
@@ -903,12 +953,7 @@ class XMLStream(object):
 
         # Convert the raw XML object into a stanza object. If no registered
         # stanza type applies, a generic StanzaBase stanza will be used.
-        stanza_type = StanzaBase
-        for stanza_class in self.__root_stanza:
-            if xml.tag == "{%s}%s" % (self.default_ns, stanza_class.name):
-                stanza_type = stanza_class
-                break
-        stanza = stanza_type(self, xml)
+        stanza = self._build_stanza(xml)
 
         # Match the stanza against registered handlers. Handlers marked
         # to run "in stream" will be executed immediately; the rest will
@@ -916,12 +961,12 @@ class XMLStream(object):
         unhandled = True
         for handler in self.__handlers:
             if handler.match(stanza):
-                stanza_copy = stanza_type(self, copy.deepcopy(xml))
+                stanza_copy = copy.copy(stanza)
                 handler.prerun(stanza_copy)
                 self.event_queue.put(('stanza', handler, stanza_copy))
                 try:
                     if handler.check_delete():
-                        self.__handlers.pop(self.__handlers.index(handler))
+                        self.__handlers.remove(handler)
                 except:
                     pass  # not thread safe
                 unhandled = False
@@ -979,7 +1024,7 @@ class XMLStream(object):
                         args[0].exception(e)
                 elif etype == 'schedule':
                     try:
-                        log.debug("Scheduling: %s%s", handler, args)
+                        log.debug('Scheduled event: %s' % args)
                         handler(*args[0])
                     except:
                         log.exception('Error processing scheduled task')
@@ -1001,6 +1046,7 @@ class XMLStream(object):
                             args[0].exception(e)
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _event_runner")
+            self.event('killed', direct=True)
             self.disconnect()
         except SystemExit:
             self.disconnect()
@@ -1032,7 +1078,7 @@ class XMLStream(object):
             log.debug('out of send thread')
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _send_thread")
-            self.stop.set();
+            self.event('killed', direct=True)
             self.disconnect()
             return
         except SystemExit:
@@ -1057,3 +1103,41 @@ class XMLStream(object):
             else:
                 self.disconnect(self)
             
+    def _thread_excepthook(self):
+        """
+        If a threaded event handler raises an exception, there is no way to
+        catch it except with an excepthook. Currently, each thread has its own
+        excepthook, but ideally we could use the main sys.excepthook.
+
+        Modifies threading.Thread to use sys.excepthook when an exception
+        is not caught.
+        """
+        init_old = threading.Thread.__init__
+
+        def init(self, *args, **kwargs):
+            init_old(self, *args, **kwargs)
+            run_old = self.run
+
+            def run_with_except_hook(*args, **kw):
+                try:
+                    run_old(*args, **kw)
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except:
+                    sys.excepthook(*sys.exc_info())
+            self.run = run_with_except_hook
+        threading.Thread.__init__ = init
+
+
+# To comply with PEP8, method names now use underscores.
+# Deprecated method names are re-mapped for backwards compatibility.
+XMLStream.startTLS = XMLStream.start_tls
+XMLStream.registerStanza = XMLStream.register_stanza
+XMLStream.removeStanza = XMLStream.remove_stanza
+XMLStream.registerHandler = XMLStream.register_handler
+XMLStream.removeHandler = XMLStream.remove_handler
+XMLStream.setSocket = XMLStream.set_socket
+XMLStream.sendRaw = XMLStream.send_raw
+XMLStream.getId = XMLStream.get_id
+XMLStream.getNewId = XMLStream.new_id
+XMLStream.sendXML = XMLStream.send_xml

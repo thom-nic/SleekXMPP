@@ -83,8 +83,8 @@ class Waiter(BaseHandler):
                        value sleekxmpp.xmlstream.RESPONSE_TIMEOUT.
         """
         if timeout is None:
-            from sleekxmpp.xmlstream.xmlstream import RESPONSE_TIMEOUT
-            timeout = RESPONSE_TIMEOUT
+            timeout = self.stream.response_timeout
+
         try:
             stanza = self._payload.get(True, timeout)
         except queue.Empty:

@@ -1,5 +1,7 @@
 import sys
 import sleekxmpp
+from sleekxmpp.xmlstream.matcher import MatchXPath
+from sleekxmpp.xmlstream.handler import Callback
 from sleekxmpp.exceptions import XMPPError
 from sleekxmpp.test import *
 
@@ -10,6 +12,7 @@ class TestStreamExceptions(SleekTest):
     """
 
     def tearDown(self):
+        sys.excepthook = sys.__excepthook__
         self.stream_close()
 
     def testXMPPErrorException(self):
@@ -45,6 +48,41 @@ class TestStreamExceptions(SleekTest):
           </message>
         """, use_values=False)
 
+    def testIqErrorException(self):
+        """Test using error exceptions with Iq stanzas."""
+
+        def handle_iq(iq):
+            raise XMPPError(condition='feature-not-implemented',
+                            text="We don't do things that way here.",
+                            etype='cancel',
+                            clear=False)
+
+        self.stream_start()
+        self.xmpp.register_handler(
+                Callback(
+                    'Test Iq',
+                     MatchXPath('{%s}iq/{test}query' % self.xmpp.default_ns),
+                     handle_iq))
+
+        self.recv("""
+          <iq type="get" id="0">
+            <query xmlns="test" />
+          </iq>
+        """)
+
+        self.send("""
+          <iq type="error" id="0">
+            <query xmlns="test" />
+            <error type="cancel">
+              <feature-not-implemented
+                  xmlns="urn:ietf:params:xml:ns:xmpp-stanzas" />
+              <text xmlns="urn:ietf:params:xml:ns:xmpp-stanzas">
+                We don&apos;t do things that way here.
+              </text>
+            </error>
+          </iq>
+        """, use_values=False)
+
     def testThreadedXMPPErrorException(self):
         """Test raising an XMPPError exception in a threaded handler."""
 
@@ -78,8 +116,15 @@ class TestStreamExceptions(SleekTest):
     def testUnknownException(self):
         """Test raising an generic exception in a threaded handler."""
 
+        raised_errors = []
+
         def message(msg):
             raise ValueError("Did something wrong")
+
+        def catch_error(*args, **kwargs):
+            raised_errors.append(True)
+
+        sys.excepthook = catch_error
 
         self.stream_start()
         self.xmpp.add_event_handler('message', message)
@@ -90,21 +135,20 @@ class TestStreamExceptions(SleekTest):
           </message>
         """)
 
-        if sys.version_info < (3, 0):
-            self.send("""
-              <message type="error">
-                <error type="cancel">
-                  <undefined-condition
-                      xmlns="urn:ietf:params:xml:ns:xmpp-stanzas" />
-                  <text xmlns="urn:ietf:params:xml:ns:xmpp-stanzas">
-                    SleekXMPP got into trouble.
-                  </text>
-                </error>
-              </message>
-            """)
-        else:
-            # Unfortunately, tracebacks do not make for very portable tests.
-            pass
+        self.send("""
+          <message type="error">
+            <error type="cancel">
+              <undefined-condition
+                  xmlns="urn:ietf:params:xml:ns:xmpp-stanzas" />
+              <text xmlns="urn:ietf:params:xml:ns:xmpp-stanzas">
+                SleekXMPP got into trouble.
+              </text>
+            </error>
+          </message>
+        """)
+
+        self.assertEqual(raised_errors, [True], "Exception was not raised: %s" % raised_errors)
+
 
 
 suite = unittest.TestLoader().loadTestsFromTestCase(TestStreamExceptions)
