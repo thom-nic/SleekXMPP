@@ -169,7 +169,7 @@ class ClientXMPP(BaseXMPP):
                 try:
                     xmpp_srv = "_xmpp-client._tcp.%s" % self.boundjid.host
                     answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
-                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
+                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
                     log.debug("No appropriate SRV record found." + \
                                   " Using JID server name.")
                 except (dns.exception.Timeout,):

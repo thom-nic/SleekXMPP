@@ -863,17 +863,15 @@ class XMLStream(object):
                 if not self.stop.isSet():
                     log.exception('Connection error.')
             
-            log.debug(self.stop.isSet())
-            log.debug(self.auto_reconnect)
-            if not self.stop.isSet():
-                if self.auto_reconnect:
-                    self.reconnect()
-                else:
-                    continue
-            else:
+            log.debug("Stopping: " + self.stop.isSet())
+            log.debug("Auto reconnect: " + self.auto_reconnect)
+            if self.stop.is_set():
                 self.event('killed', direct=True)
                 self.disconnect()
                 break
+
+            if self.auto_reconnect: self.reconnect()
+
         
     def __read_xml(self):
         """
@@ -1061,8 +1059,7 @@ class XMLStream(object):
         try:
             while not self.stop.isSet():
                 #if the session hasn't started, don't start sending queued messages
-                if not self.session_started_event.isSet(): 
-                    time.sleep(.1)
+                if not self.session_started_event.wait(0.1):
                     continue
                 try:
                     data = self.send_queue.get(True, WAIT_TIMEOUT)[1]
@@ -1076,6 +1073,8 @@ class XMLStream(object):
                     if not self.stop.isSet():
                         self.reconnect()
             log.debug('out of send thread')
+# FIXME these exceptions will never occur since _send_thread is always its own
+# thread not the main thread.  Hence the exceptions will never occur here.
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _send_thread")
             self.event('killed', direct=True)
