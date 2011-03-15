@@ -17,10 +17,13 @@ import threading
 import time
 import types
 import random
+from Queue import Full
 try:
     import queue
 except ImportError:
     import Queue as queue
+    
+import dns.resolver
 
 from sleekxmpp.thirdparty.statemachine import StateMachine
 from sleekxmpp.xmlstream import Scheduler, tostring
@@ -191,14 +194,16 @@ class XMLStream(object):
         self.stream_header = "<stream>"
         self.stream_footer = "</stream>"
 
+        self.reconnect_lock = threading.Lock()
         self.stop = threading.Event()
+        self.stop.clear()
         self.stream_end_event = threading.Event()
         self.stream_end_event.set()
         self.session_started_event = threading.Event()
         self.session_started_event.clear()
         self.event_queue = queue.Queue()
-        self.send_queue = queue.PriorityQueue()
-        self.scheduler = Scheduler(self.event_queue, self.stop)
+        self.send_queue = queue.PriorityQueue(500)
+        self.scheduler = Scheduler(self.stop)
 
         self.namespace_map = {}
 
@@ -265,13 +270,14 @@ class XMLStream(object):
             self.use_ssl = use_ssl
         if use_tls is not None:
             self.use_tls = use_tls
-
+            
+        
         # Repeatedly attempt to connect until a successful connection
         # is established.
         delay = 1.0 # reconnection delay
         connected = self.state.transition('disconnected', 'connected',
                                           func=self._connect)
-        while reattempt and not connected:
+        while reattempt and not connected and not self.stop.isSet():
             delay = min(delay * RECONNECT_QUIESCE_FACTOR, RECONNECT_MAX_DELAY)
             delay = random.normalvariate(delay, delay * RECONNECT_QUIESCE_JITTER)
             logging.debug('Waiting %.3fs until next reconnect attempt...', delay)
@@ -281,9 +287,48 @@ class XMLStream(object):
         return connected
 
     def _connect(self):
-        self.stop.clear()
+        # call res_init to refresh name resolution is necessary:
+        try:
+            Socket.getaddrinfo(self.address[0], self.address[1])
+        except Socket.gaierror as e:
+            if e.errno == 2: # name resolution error
+                logging.warn("Name resolution error; calling res_init()")
+                try:
+                    import ctypes
+                    libresolv = ctypes.CDLL('libresolv.so.2')
+                    result = getattr(libresolv,'__res_init')()
+                    if result != 0:
+                        logging.warn( "res_init() call returned " + result )
+                except:
+                    logging.exception( "Error while calling res_init" )
+
+        #do the srv lookup
+        try:
+            xmpp_srv = "_xmpp-client._tcp.%s" % self.address[0]
+            answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
+            log.debug("No appropriate SRV record found." + \
+                          " Using %s" %self.address[0])
+        else:
+            # Pick a random server, weighted by priority.
+            addresses = {}
+            intmax = 0
+            for answer in answers:
+                intmax += answer.priority
+                addresses[intmax] = (answer.target.to_text()[:-1],
+                                     answer.port)
+            #python3 returns a generator for dictionary keys
+            priorities = [x for x in addresses.keys()]
+            priorities.sort()
+
+            picked = random.randint(0, intmax)
+            for priority in priorities:
+                if picked <= priority:
+                    self.address = (addresses[priority], self.address[1])
+                    break
+
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
-        self.socket.settimeout(None)
+        self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
             logging.debug("Socket Wrapped for SSL")
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
@@ -323,43 +368,51 @@ class XMLStream(object):
                          and processing should be restarted.
                          Defaults to False.
         """
-        self.state.transition('connected', 'disconnected', wait=0.0,
-                              func=self._disconnect, args=(reconnect,))
-
-    def _disconnect(self, reconnect=False):
+        if reconnect:
+            self.reconnect()
+        else:
+            self.auto_reconnect = False
+            self.state.transition('connected', 'disconnected', wait=0.0,
+                              func=self._disconnect)
+        
+    def _disconnect(self):
         # Send the end of stream marker.
         self.sendStreamPacket(self.stream_footer)
         # Wait for confirmation that the stream was
         # closed in the other direction.
-        if not reconnect:
-            self.auto_reconnect = False
         self.stream_end_event.wait(4)
-        if not self.auto_reconnect:
-            self.stop.set()
+        self.session_started_event.clear()
         try:
+            self.socket.shutdown(Socket.SHUT_RDWR)
             self.socket.close()
             self.filesocket.close()
-            self.socket.shutdown(Socket.SHUT_RDWR)
+                
         except Socket.error as serr:
             pass
         finally:
             #clear your application state
             self.event("disconnected", direct=True)
             return True
+        
+            
 
     def reconnect(self):
         """
         Reset the stream's state and reconnect to the server.
         """
-        log.debug("reconnecting...")
-        self.state.transition('connected', 'disconnected', wait=2.0,
-                              func=self._disconnect, args=(False,))
-        time.sleep(1)
-        log.debug("connecting...")
-        retval = self.state.transition('disconnected', 'connected',
-                                     wait=2.0, func=self._connect)
-        if retval:
-            self.process(threaded=True)
+        if self.reconnect_lock.acquire(False):
+            log.debug("reconnecting...")
+            self.state.transition('connected', 'disconnected', wait=2.0,
+                                  func=self._disconnect)
+            log.debug("connecting...")
+            #retval = self.state.transition('disconnected', 'connected',
+            #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
+            #time.sleep(30)
+            retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
+            self.reconnect_lock.release()
+        else:
+            log.debug("already reconnecting... can't acquire reconnect_lock")
+            retval = False
         return retval
         
     def set_socket(self, socket, ignore=False):
@@ -381,9 +434,9 @@ class XMLStream(object):
             # version to work around a broken implementation in
             # Python 2.x.
             if sys.version_info < (3, 0):
-                self.filesocket = FileSocket(self.socket)
+                self.filesocket = FileSocket(self.socket, statemachine=self.state)
             else:
-                self.filesocket = self.socket.makefile('rb', 0)
+                self.filesocket = self.socket.makefile('rb', 0, runningEvent=self.state)
             if not ignore:
                 self.state._set_state('connected')
 
@@ -657,8 +710,13 @@ class XMLStream(object):
         Arguments:
             data -- Any string value.
         """
-        self.send_queue.put((priority, data))
-        return True
+        retval = True
+        try: 
+            self.send_queue.put((priority, data), block=True, timeout=1)
+        except Full:
+            log.exception("send queue is full, retry message later")
+            retval = False
+        return retval
 
     def send_xml(self, data, mask=None, timeout=RESPONSE_TIMEOUT, priority=5):
         """
@@ -695,9 +753,10 @@ class XMLStream(object):
         self.scheduler.process(threaded=True)
 
         def start_thread(name, target):
-            self.__thread[name] = threading.Thread(name=name, target=target)
-            self.__thread[name].daemon = True
-            self.__thread[name].start()
+            if self.__thread.get(name) is None or self.__thread.get(name).isAlive() == False:
+                self.__thread[name] = threading.Thread(name=name, target=target)
+                self.__thread[name].daemon = True
+                self.__thread[name].start()
 
         for t in range(0, HANDLER_THREADS):
             log.debug("Starting HANDLER THREAD")
@@ -718,25 +777,25 @@ class XMLStream(object):
         Processing will continue after any recoverable errors
         if reconnections are allowed.
         """
-        firstrun = True
 
         # The body of this loop will only execute once per connection.
         # Additional passes will be made only if an error occurs and
         # reconnecting is permitted.
-        while firstrun or (self.auto_reconnect and not self.stop.isSet()):
-            firstrun = False
+        while True:
             try:
-                if self.is_client:
-                    self.sendStreamPacket(self.stream_header)
                 # The call to self.__read_xml will block and prevent
                 # the body of the loop from running until a disconnect
                 # occurs. After any reconnection, the stream header will
                 # be resent and processing will resume.
-                while not self.stop.isSet() and self.__read_xml():
+                while not self.stop.isSet():
+                    #Only process the stream while connected to the server
+                    if not self.state.ensure('connected', wait=0.1, block_on_transition=True):
+                        continue 
                     # Ensure the stream header is sent for any
                     # new connections.
-                    if self.is_client:
+                    if not self.session_started_event.isSet():
                         self.sendStreamPacket(self.stream_header)
+                    self.__read_xml()
             except KeyboardInterrupt:
                 log.debug("Keyboard Escape Detected in _process")
                 self.stop.set()
@@ -744,15 +803,28 @@ class XMLStream(object):
                 log.debug("SystemExit in _process")
                 self.stop.set()
                 self.scheduler.run = False
+            except ssl.SSLError, e:
+                #log.exception('Socket Timeout... Continuing')
+                if e.errno == None: #FIXME
+                    continue
+                else:
+                    log.exception('ssl socket error')
             except Socket.error:
                 log.exception('Socket Error')
             except:
                 if not self.stop.isSet():
                     log.exception('Connection error.')
-            if not self.stop.isSet() and self.auto_reconnect:
-                self.disconnect(reconnect=True)
+            
+            log.debug(self.stop.isSet())
+            log.debug(self.auto_reconnect)
+            if not self.stop.isSet():
+                if self.auto_reconnect:
+                    self.reconnect()
+                else:
+                    continue
             else:
                 self.disconnect()
+                break
         
     def __read_xml(self):
         """
@@ -945,6 +1017,7 @@ class XMLStream(object):
                 #if the session hasn't started, don't start sending queued messages
                 if not self.session_started_event.isSet(): 
                     time.sleep(.1)
+                    continue
                 try:
                     data = self.send_queue.get(True, WAIT_TIMEOUT)[1]
                 except queue.Empty:
@@ -954,18 +1027,22 @@ class XMLStream(object):
                     self.socket.send(data.encode('utf-8'))
                 except:
                     log.warning("Failed to send %s" % data)
-                    self.disconnect(self.auto_reconnect)
-                    
+                    if not self.stop.isSet():
+                        self.reconnect()
+            log.debug('out of send thread')
         except KeyboardInterrupt:
             log.debug("Keyboard Escape Detected in _send_thread")
+            self.stop.set();
             self.disconnect()
             return
         except SystemExit:
+            self.stop.set();
             self.disconnect()
             return
         
     def sendStreamPacket(self, data, block=False):
         try:
+            log.debug("SEND: %s" % data)
             if not block:
                 self.socket.send(data.encode('utf-8'))
             else:
@@ -975,4 +1052,8 @@ class XMLStream(object):
                 return waitfor.wait()
         except:
             logging.warning("Failed to send %s" % data)
-            self.disconnect(self.auto_reconnect)
+            if self.auto_reconnect:
+                self.reconnect()
+            else:
+                self.disconnect(self)
+            

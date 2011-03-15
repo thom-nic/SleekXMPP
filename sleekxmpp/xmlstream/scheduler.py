@@ -107,7 +107,7 @@ class Scheduler(object):
         quit    -- Stop the scheduler.
     """
 
-    def __init__(self, parentqueue=None, parentstop=None):
+    def __init__(self, stopevent):
         """
         Create a new scheduler.
 
@@ -118,8 +118,7 @@ class Scheduler(object):
         self.schedule = []
         self.thread = None
         self.run = False
-        self.parentqueue = parentqueue
-        self.parentstop = parentstop
+        self.stop = stopevent
 
     def process(self, threaded=True):
         """
@@ -140,48 +139,42 @@ class Scheduler(object):
         """Process scheduled tasks."""
         self.run = True
         try:
-            while self.run and (self.parentstop is None or not self.parentstop.isSet()):
-                    wait = 1
-                    updated = False
-                    if self.schedule:
-                        wait = self.schedule[0].next - time.time()
-                    try:
-                        if wait <= 0.0:
-                            newtask = self.addq.get(False)
-                        else:
-                            if wait >= 3.0:
-                                wait = 3.0
-                            newtask = self.addq.get(True, wait)
-                    except queue.Empty:
-                        cleanup = []
-                        for task in self.schedule:
-                            if time.time() >= task.next:
-                                updated = True
-                                if not task.run():
-                                    cleanup.append(task)
-                            else:
-                                break
-                        for task in cleanup:
-                            x = self.schedule.pop(self.schedule.index(task))
+            while self.run and not self.stop.isSet():
+                wait = 1
+                updated = False
+                if self.schedule:
+                    wait = self.schedule[0].next - time.time()
+                try:
+                    if wait <= 0.0:
+                        newtask = self.addq.get(False)
                     else:
-                        updated = True
-                        self.schedule.append(newtask)
-                    finally:
-                        if updated:
-                            self.schedule = sorted(self.schedule,
-                                                   key=lambda task: task.next)
+                        if wait >= 3.0:
+                            wait = 3.0
+                        newtask = self.addq.get(True, wait)
+                except queue.Empty:
+                    cleanup = []
+                    for task in self.schedule:
+                        if time.time() >= task.next:
+                            updated = True
+                            if not task.run():
+                                cleanup.append(task)
+                        else:
+                            break
+                    for task in cleanup:
+                        x = self.schedule.pop(self.schedule.index(task))
+                else:
+                    updated = True
+                    self.schedule.append(newtask)
+                finally:
+                    if updated:
+                        self.schedule = sorted(self.schedule,
+                                               key=lambda task: task.next)
         except KeyboardInterrupt:
             self.run = False
-            if self.parentstop is not None:
-                log.debug("stopping parent")
-                self.parentstop.set()
         except SystemExit:
             self.run = False
-            if self.parentstop is not None:
-                self.parentstop.set()
         log.debug("Quitting Scheduler thread")
-        if self.parentqueue is not None:
-            self.parentqueue.put(('quit', None, None))
+        
 
     def add(self, name, seconds, callback, args=None,
             kwargs=None, repeat=False, qpointer=None):
@@ -199,9 +192,19 @@ class Scheduler(object):
             qpointer -- A pointer to an event queue for queuing callback
                         execution instead of executing immediately.
         """
+        for task in self.schedule:
+            if task.name == name:
+                raise UniqueKeyConstraint("Key %s already exists" %name)
+            
         self.addq.put(Task(name, seconds, callback, args,
                            kwargs, repeat, qpointer))
 
     def quit(self):
         """Shutdown the scheduler."""
         self.run = False
+
+class UniqueKeyConstraint(Exception):
+    def __init__(self, value):
+        self.parameter = value
+    def __str__(self):
+        return repr(self.parameter)

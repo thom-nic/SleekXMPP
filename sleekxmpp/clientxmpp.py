@@ -94,7 +94,6 @@ class ClientXMPP(BaseXMPP):
 
         #TODO: Use stream state here
         self.authenticated = False
-        self.sessionstarted = False
         self.bound = False
         self.bindfail = False
         self.add_event_handler('connected', self.handle_connected)
@@ -140,7 +139,6 @@ class ClientXMPP(BaseXMPP):
     def handle_connected(self, event=None):
         #TODO: Use stream state here
         self.authenticated = False
-        self.sessionstarted = False
         self.bound = False
         self.bindfail = False
         self.schedule("session timeout checker", 15,
@@ -174,9 +172,10 @@ class ClientXMPP(BaseXMPP):
                 log.debug("Since no address is supplied," + \
                               "attempting SRV lookup.")
                 try:
+                    
                     xmpp_srv = "_xmpp-client._tcp.%s" % self.server
                     answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
-                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
                     log.debug("No appropriate SRV record found." + \
                                   " Using JID server name.")
                 else:
@@ -436,7 +435,6 @@ class ClientXMPP(BaseXMPP):
         session_ns = 'urn:ietf:params:xml:ns:xmpp-session'
         if "{%s}session" % session_ns not in self.features or self.bindfail:
             log.debug("Established Session")
-            self.sessionstarted = True
             self.session_started_event.set()
             self.event("session_start")
 
@@ -451,7 +449,6 @@ class ClientXMPP(BaseXMPP):
             iq = self.makeIqSet(xml)
             response = self.sendStreamPacket(iq, True)
             log.debug("Established Session")
-            self.sessionstarted = True
             self.session_started_event.set()
             self.event("session_start")
         else:
