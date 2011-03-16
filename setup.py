@@ -39,6 +39,8 @@ CLASSIFIERS      = [ 'Intended Audience :: Developers',
 
 packages     = [ 'sleekxmpp',
                  'sleekxmpp/plugins',
+                 'sleekxmpp/plugins/xep_0030',
+                 'sleekxmpp/plugins/xep_0030/stanza',
                  'sleekxmpp/stanza',
                  'sleekxmpp/test',
                  'sleekxmpp/xmlstream',
