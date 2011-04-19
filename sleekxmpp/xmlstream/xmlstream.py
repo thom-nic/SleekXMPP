@@ -286,10 +286,16 @@ class XMLStream(object):
                                               func=self._connect)
         return connected
 
-    def _connect(self):
-        # call res_init to refresh name resolution is necessary:
+    def query_dns(self, address, resolver):
+        '''
+        Will query for a dns record.  Checks for an SRV dns record first, if found
+        it will return a random record from the highest priority.  
+        
+        If no SRV record is found, the domain of the jid will be used.
+        '''
+        ret_addr = address
         try:
-            Socket.getaddrinfo(self.address[0], self.address[1])
+            Socket.getaddrinfo(ret_addr[0], ret_addr[1])
         except Socket.gaierror as e:
             if e.errno == 2: # name resolution error
                 logging.warn("Name resolution error; calling res_init()")
@@ -301,10 +307,12 @@ class XMLStream(object):
                         logging.warn( "res_init() call returned " + result )
                 except:
                     logging.exception( "Error while calling res_init" )
-
-        #do the srv lookup
+        
         try:
-            xmpp_srv = "_xmpp-client._tcp.%s" % self.address[0]
+            resolver.nameservers = []
+            resolver.read_resolv_conf(f='/etc/resolv.conf')
+            logging.debug(resolver.nameservers)
+            xmpp_srv = "_xmpp-client._tcp.%s" % address[0]
             answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
             log.debug("No appropriate SRV record found." + \
@@ -324,9 +332,17 @@ class XMLStream(object):
             picked = random.randint(0, intmax)
             for priority in priorities:
                 if picked <= priority:
-                    self.address = (addresses[priority], self.address[1])
+                    ret_addr = (addresses[priority][0], addresses[priority][1])
                     break
+                
+        return ret_addr
+        
+    def _connect(self):
+        # call res_init to refresh name resolution is necessary:
+        address = self.query_dns(self.address, dns.resolver.get_default_resolver())
 
+        #do the srv lookup
+       
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
@@ -343,15 +359,15 @@ class XMLStream(object):
                 self.socket = ssl_socket
 
         try:
-            log.debug("Connecting to %s:%s" % self.address)
-            self.socket.connect(self.address)
+            log.debug("Connecting to %s:%s" % address)
+            self.socket.connect(address)
             self.set_socket(self.socket, ignore=True)
             #this event is where you should set your application state
             self.event("connected", direct=True)
             return True
         except Socket.error as serr:
             error_msg = "Could not connect to %s:%s. Socket Error #%s: %s"
-            log.error(error_msg % (self.address[0], self.address[1],
+            log.error(error_msg % (address[0], address[1],
                                        serr.errno, serr.strerror))
             time.sleep(1)
             return False

@@ -161,42 +161,12 @@ class ClientXMPP(BaseXMPP):
             address -- A tuple containing the server's host and port.
         """
         self.session_started_event.clear()
-        if not address or len(address) < 2:
-            if not self.srv_support:
-                log.debug("Did not supply (address, port) to connect" + \
-                              " to and no SRV support is installed" + \
-                              " (http://www.dnspython.org)." + \
-                              " Continuing to attempt connection, using" + \
-                              " server hostname from JID.")
-            else:
-                log.debug("Since no address is supplied," + \
-                              "attempting SRV lookup.")
-                try:
-                    
-                    xmpp_srv = "_xmpp-client._tcp.%s" % self.server
-                    answers = dns.resolver.query(xmpp_srv, dns.rdatatype.SRV)
-                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
-                    log.debug("No appropriate SRV record found." + \
-                                  " Using JID server name.")
-                else:
-                    # Pick a random server, weighted by priority.
-
-                    addresses = {}
-                    intmax = 0
-                    for answer in answers:
-                        intmax += answer.priority
-                        addresses[intmax] = (answer.target.to_text()[:-1],
-                                             answer.port)
-                    #python3 returns a generator for dictionary keys
-                    priorities = [x for x in addresses.keys()]
-                    priorities.sort()
-
-                    picked = random.randint(0, intmax)
-                    for priority in priorities:
-                        if picked <= priority:
-                            address = addresses[priority]
-                            break
-
+        if not address or len(address) < 2 and not self.srv_support:
+            log.debug("Did not supply (address, port) to connect" + \
+                          " to and no SRV support is installed" + \
+                          " (http://www.dnspython.org)." + \
+                          " Continuing to attempt connection, using" + \
+                          " server hostname from JID.")
         if not address:
             # If all else fails, use the server from the JID.
             address = (self.boundjid.host, 5222)
