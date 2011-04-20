@@ -146,7 +146,7 @@ class ClientXMPP(BaseXMPP):
 
     def _session_timeout_check(self):
         if not self.session_started_event.isSet():
-            log.debug("Session start has taken more than 15 seconds")
+            log.debug("Session start has taken more than 45 seconds")
             self.disconnect(reconnect=self.auto_reconnect)
 
     def connect(self, address=tuple()):

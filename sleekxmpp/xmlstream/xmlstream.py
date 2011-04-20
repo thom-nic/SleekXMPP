@@ -294,6 +294,7 @@ class XMLStream(object):
         If no SRV record is found, the domain of the jid will be used.
         '''
         ret_addr = address
+        # call res_init to refresh name resolution is necessary:
         try:
             Socket.getaddrinfo(ret_addr[0], ret_addr[1])
         except Socket.gaierror as e:
@@ -338,11 +339,7 @@ class XMLStream(object):
         return ret_addr
         
     def _connect(self):
-        # call res_init to refresh name resolution is necessary:
         address = self.query_dns(self.address, dns.resolver.get_default_resolver())
-
-        #do the srv lookup
-       
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
         if self.use_ssl and self.ssl_support:
