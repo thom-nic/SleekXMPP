@@ -339,6 +339,8 @@ class XMLStream(object):
         return ret_addr
         
     def _connect(self):
+        self.scheduler.addq.queue.clear()
+        self.scheduler.schedule = []
         address = self.query_dns(self.address, dns.resolver.get_default_resolver())
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
