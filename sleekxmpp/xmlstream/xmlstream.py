@@ -12,6 +12,7 @@ import copy
 import logging
 import socket as Socket
 import ssl
+import struct
 import sys
 import threading
 import time
@@ -204,6 +205,7 @@ class XMLStream(object):
         self.event_queue = queue.Queue()
         self.send_queue = queue.PriorityQueue(500)
         self.scheduler = Scheduler(self.stop)
+        self.wrapped_socket = threading.Event()
 
         self.namespace_map = {}
 
@@ -339,11 +341,16 @@ class XMLStream(object):
         return ret_addr
         
     def _connect(self):
-        self.scheduler.addq.queue.clear()
-        self.scheduler.schedule = []
         address = self.query_dns(self.address, dns.resolver.get_default_resolver())
+        self.wrapped_socket.clear()
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
-        self.socket.settimeout(1)
+#        self.socket.settimeout(1)
+        # send and rcv timeout must be different:
+        self.socket.setsockopt( Socket.SOL_SOCKET, Socket.SO_RCVTIMEO,
+                struct.pack(str("ll"),2,0) )
+        self.socket.setsockopt( Socket.SOL_SOCKET, Socket.SO_SNDTIMEO,
+                struct.pack(str("ll"),20,0) )
+#        self.socket.setsockopt(Socket.SOL_SOCKET,Socket.SO_SNDBUF,36863)
         if self.use_ssl and self.ssl_support:
             logging.debug("Socket Wrapped for SSL")
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
@@ -420,9 +427,12 @@ class XMLStream(object):
             self.state.transition('connected', 'disconnected', wait=2.0,
                                   func=self._disconnect)
             log.debug("connecting...")
-            #retval = self.state.transition('disconnected', 'connected',
-            #                             wait=2.0, func=self._connect, args=(self.auto_reconnect,))
-            #time.sleep(30)
+
+            # clear the scheduler & event queue
+            self.scheduler.addq.queue.clear()
+            self.scheduler.schedule = []
+            self.event_queue = queue.Queue()
+
             retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
             self.reconnect_lock.release()
         else:
@@ -465,6 +475,7 @@ class XMLStream(object):
         if self.ssl_support:
             logging.info("Negotiating TLS")
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
+            self.wrapped_socket.set()
             ssl_socket = ssl.wrap_socket(self.socket,
                                          ssl_version=ssl.PROTOCOL_TLSv1,
                                          do_handshake_on_connect=False,
@@ -478,6 +489,7 @@ class XMLStream(object):
                 self.socket = ssl_socket
             self.socket.do_handshake()
             self.set_socket(self.socket)
+            log.debug("TLS handshake complete")
             return True
         else:
             log.warning("Tried to enable TLS, but ssl module not found.")
@@ -827,11 +839,14 @@ class XMLStream(object):
             except Socket.error:
                 log.exception('Socket Error')
             except:
+                if self.wrapped_socket.is_set(): 
+                    log.debug('Ignoring read error during TLS handshake')
+                    continue
                 if not self.stop.isSet():
                     log.exception('Connection error.')
             
-            log.debug(self.stop.isSet())
-            log.debug(self.auto_reconnect)
+            log.debug("Process: stop? %s",self.stop.isSet())
+            log.debug("Process: reconnect? %s",self.auto_reconnect)
             if not self.stop.isSet():
                 if self.auto_reconnect:
                     self.reconnect()
@@ -849,6 +864,7 @@ class XMLStream(object):
         depth = 0
         root = None
         for (event, xml) in ET.iterparse(self.filesocket, (b'end', b'start')):
+            self.wrapped_socket.clear()
             if event == b'start':
                 if depth == 0:
                     # We have received the start of the root element.
@@ -872,6 +888,7 @@ class XMLStream(object):
                     try:
                         self.__spawn_event(xml)
                     except RestartStream:
+                        log.debug("Restart stream")
                         return True
                     if root:
                         # Keep the root element empty of children to
@@ -1014,14 +1031,12 @@ class XMLStream(object):
                         log.exception(error_msg % str(func))
                         if hasattr(args[0], 'exception'):
                             args[0].exception(e)
-        except KeyboardInterrupt:
-            log.debug("Keyboard Escape Detected in _event_runner")
-            self.disconnect()
-        except SystemExit:
-            self.disconnect()
-        #empty the queue
-        self.event_queue = queue.Queue()
-        return
+        # NOTE this function is ALWAYS run in a thread, and as such, 
+        # KeyboardInterrupt and SystemExit will NEVER EVER EVER be 
+        # raised here.  
+        except Exception as ex:
+            log.exception("Fatal exception in _event_runner: %s",ex)
+            if not self.stop.isSet() and self.auto_reconnect: self.reconnect()
 
     def _send_thread(self):
         """
@@ -1039,34 +1054,42 @@ class XMLStream(object):
                     continue
                 log.debug("SEND: %s" % data)
                 try:
-                    self.socket.send(data.encode('utf-8'))
-                except:
-                    log.warning("Failed to send %s" % data)
-                    if not self.stop.isSet():
-                        self.reconnect()
+                    data = data.encode('utf-8')
+                    total = len(data)
+                    sent = 0
+                    count = 0
+                    # TODO should test for connected state
+                    while sent < total and not self.stop.is_set():
+                        sent += self.socket.send(data[sent:])
+                        count += 1
+                    if count > 1: log.debug('SENT in %d chunks', count)
+#                    self.socket.send(data.encode('utf-8'), Socket.MSG_WAITALL)
+#                    self.socket.sendall(data.encode('utf-8'))
+                except Exception as ex:
+                    logging.warning("SEND FAILED: %s\n%s", ex, data)
+                    # FIXME send errors are not always fatal.
+                    # Don't force a reconnect prematurely.
+#                    if not self.stop.isSet(): self.reconnect()
             log.debug('out of send thread')
-        except KeyboardInterrupt:
-            log.debug("Keyboard Escape Detected in _send_thread")
-            self.stop.set();
-            self.disconnect()
-            return
-        except SystemExit:
-            self.stop.set();
-            self.disconnect()
-            return
+        # NOTE this function is ALWAYS run in a thread, and as such, 
+        # KeyboardInterrupt and SystemExit will NEVER EVER EVER be 
+        # raised here.  
+        except Exception as ex:
+            log.exception("Unexpected error in send thread! %s",ex)
+            if not self.stop.isSet() and self.auto_reconnect: self.reconnect()
         
     def sendStreamPacket(self, data, block=False):
         try:
-            log.debug("SEND: %s" % data)
+            log.debug("SSEND: %s" % data) #SSEND means stream send :)
             if not block:
-                self.socket.send(data.encode('utf-8'))
+                self.socket.sendall(data.encode('utf-8'))
             else:
                 waitfor = Waiter('IqWait_%s' % data['id'], MatcherId(data['id']))
                 self.register_handler(waitfor)
-                self.socket.send(tostring(data.xml).encode('utf-8'))
+                self.socket.sendall(tostring(data.xml).encode('utf-8'))
                 return waitfor.wait()
-        except:
-            logging.warning("Failed to send %s" % data)
+        except Exception as ex:
+            logging.warning("SEND FAILED: %s\n%s", ex, data)
             if self.auto_reconnect:
                 self.reconnect()
             else:
