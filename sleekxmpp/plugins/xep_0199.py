@@ -9,6 +9,7 @@ from xml.etree import cElementTree as ET
 from . import base
 import time
 import logging
+from ..xmlstream.scheduler import UniqueKeyConstraint
 
 
 log = logging.getLogger(__name__)
