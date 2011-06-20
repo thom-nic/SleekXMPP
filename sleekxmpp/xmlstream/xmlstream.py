@@ -430,8 +430,7 @@ class XMLStream(object):
             log.debug("connecting...")
 
             # clear the scheduler & event queue
-            self.scheduler.addq.queue.clear()
-            self.scheduler.schedule = []
+            self.scheduler.remove('session timeout checker')
             self.event_queue = queue.Queue()
 
             retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
