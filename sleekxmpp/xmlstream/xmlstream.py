@@ -339,6 +339,7 @@ class XMLStream(object):
         return ret_addr
         
     def _connect(self):
+        self.scheduler.remove('session timeout checker')
         address = self.query_dns(self.address, dns.resolver.get_default_resolver())
         self.socket = self.socket_class(Socket.AF_INET, Socket.SOCK_STREAM)
         self.socket.settimeout(1)
@@ -474,9 +475,13 @@ class XMLStream(object):
                 self.socket.socket = ssl_socket
             else:
                 self.socket = ssl_socket
-            self.socket.do_handshake()
-            self.set_socket(self.socket)
-            return True
+            try:
+                self.socket.do_handshake()  
+                self.set_socket(self.socket)           
+                return True
+            except Exception, e:
+                logging.exception('Error starting tls socket!' %e.args[0])
+                raise
         else:
             log.warning("Tried to enable TLS, but ssl module not found.")
             return False

@@ -8,6 +8,7 @@
 
 import time
 import threading
+from threading import RLock
 import logging
 try:
     import queue
@@ -64,7 +65,7 @@ class Task(object):
         self.repeat = repeat
         self.next = time.time() + self.seconds
         self.qpointer = qpointer
-
+        
     def run(self):
         """
         Execute the task's callback.
@@ -119,6 +120,7 @@ class Scheduler(object):
         self.thread = None
         self.run = False
         self.stop = stopevent
+        self.schedule_lock = RLock()
 
     def process(self, threaded=True):
         """
@@ -131,6 +133,7 @@ class Scheduler(object):
         if threaded:
             self.thread = threading.Thread(name='scheduler_process',
                                            target=self._process)
+            self.thread.daemon = True
             self.thread.start()
         else:
             self._process()
@@ -153,6 +156,7 @@ class Scheduler(object):
                         newtask = self.addq.get(True, wait)
                 except queue.Empty:
                     cleanup = []
+                    self.schedule_lock.acquire()
                     for task in self.schedule:
                         if time.time() >= task.next:
                             updated = True
@@ -162,13 +166,16 @@ class Scheduler(object):
                             break
                     for task in cleanup:
                         x = self.schedule.pop(self.schedule.index(task))
+                    
                 else:
                     updated = True
+                    self.schedule_lock.acquire()
                     self.schedule.append(newtask)
                 finally:
                     if updated:
                         self.schedule = sorted(self.schedule,
                                                key=lambda task: task.next)
+                    self.schedule_lock.release()
         except KeyboardInterrupt:
             self.run = False
         except SystemExit:
@@ -192,12 +199,32 @@ class Scheduler(object):
             qpointer -- A pointer to an event queue for queuing callback
                         execution instead of executing immediately.
         """
-        for task in self.schedule:
-            if task.name == name:
-                raise UniqueKeyConstraint("Key %s already exists" %name)
-            
-        self.addq.put(Task(name, seconds, callback, args,
-                           kwargs, repeat, qpointer))
+        try:
+            self.schedule_lock.acquire()
+            for task in self.schedule:
+                if task.name == name:
+                    raise UniqueKeyConstraint("Key %s already exists" %name)
+                
+            self.addq.put(Task(name, seconds, callback, args,
+                               kwargs, repeat, qpointer))
+        except:
+            raise
+        finally:
+            self.schedule_lock.release()
+        
+    def remove(self, name):
+        try:
+            self.schedule_lock.acquire()
+            the_task = None
+            for task in self.schedule:
+                if task.name == name:
+                    the_task = task
+            if the_task is not None:
+                self.schedule.remove(the_task)
+        except:
+            raise
+        finally:
+            self.schedule_lock.release()
 
     def quit(self):
         """Shutdown the scheduler."""

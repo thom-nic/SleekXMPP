@@ -97,6 +97,7 @@ class ClientXMPP(BaseXMPP):
         self.bound = False
         self.bindfail = False
         self.add_event_handler('connected', self.handle_connected)
+        self.add_event_handler('disconnected', self.handle_disconnected)
 
         self.register_handler(
                 Callback('Stream Features',
@@ -143,6 +144,9 @@ class ClientXMPP(BaseXMPP):
         self.bindfail = False
         self.schedule("session timeout checker", 45,
                       self._session_timeout_check)
+        
+    def handle_disconnected(self, event=None):
+        self.scheduler.remove('session timeout checker')
 
     def _session_timeout_check(self):
         if not self.session_started_event.isSet():
