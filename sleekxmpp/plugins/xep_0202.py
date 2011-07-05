@@ -9,6 +9,7 @@
 from datetime import datetime, tzinfo
 import logging
 import time
+import _strptime #This import fixes http://bugs.python.org/issue8098
 
 from . import base
 from .. stanza.iq import Iq
