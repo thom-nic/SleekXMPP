@@ -123,6 +123,12 @@ class ClientXMPP(BaseXMPP):
         self.add_handler("<challenge xmlns='%s' />"  % sasl_ns, 
                          self._handle_sasl_digest_md5_auth, 
                          instream=True)
+       
+        tls_ns = 'urn:ietf:params:xml:ns:xmpp-tls'
+        self.add_handler("<proceed xmlns='%s' />" % tls_ns,
+                         self._handle_tls_start,
+                         name='TLS Proceed',
+                         instream=True)
         
         self.register_feature(
             "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls' />",
@@ -256,11 +262,6 @@ class ClientXMPP(BaseXMPP):
             xml -- The STARTLS proceed element.
         """
         if not self.authenticated and self.ssl_support:
-            tls_ns = 'urn:ietf:params:xml:ns:xmpp-tls'
-            self.add_handler("<proceed xmlns='%s' />" % tls_ns,
-                             self._handle_tls_start,
-                             name='TLS Proceed',
-                             instream=True)
             self.sendStreamPacket(tostring(xml))
             return True
         else:
@@ -321,15 +322,6 @@ class ClientXMPP(BaseXMPP):
         return True
     
     def _handle_sasl_digest_md5_auth(self, xml):
-        sasl_ns = 'urn:ietf:params:xml:ns:xmpp-sasl'
-        self.add_handler("<success xmlns='%s' />" % sasl_ns,
-                         self._handle_auth_success,
-                         name='SASL Sucess',
-                         instream=True)
-        self.add_handler("<failure xmlns='%s' />" % sasl_ns,
-                         self._handle_auth_fail,
-                         name='SASL Failure',
-                         instream=True)
         challenge = [item.split('=', 1) for item in base64.b64decode(xml.text).replace("\"", "").split(',', 6) ]
         challenge = dict(challenge)
         logging.debug("MD5 auth challenge: %s", challenge)
