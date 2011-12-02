@@ -104,7 +104,7 @@ class XMLStream(object):
         socket        -- The connection to the server.
         ssl_support   -- Indicates if a SSL library is available for use.
         ssl_version   -- The version of the SSL protocol to use.
-                         Defaults to ssl.PROTOCOL_TLSv1.
+                         Defaults to ssl.PROTOCOL_SSLv3.
         state         -- A state machine for managing the stream's
                          connection state.
         stream_footer -- The start tag and any attributes for the stream's
@@ -173,7 +173,7 @@ class XMLStream(object):
         self.sendXML = self.send_xml
 
         self.ssl_support = SSL_SUPPORT
-        self.ssl_version = ssl.PROTOCOL_TLSv1
+        self.ssl_version = ssl.PROTOCOL_SSLv3
 
         self.state = StateMachine(('disconnected', 'connected'))
         self.state._set_state('disconnected')
@@ -202,7 +202,7 @@ class XMLStream(object):
         self.stream_end_event.set()
         self.session_started_event = threading.Event()
         self.session_started_event.clear()
-        self.event_queue = queue.Queue()
+        self.event_queue = ClearableQueue()
         self.send_queue = queue.PriorityQueue(500)
         self.scheduler = Scheduler(self.stop)
         self.wrapped_socket = threading.Event()
@@ -431,7 +431,7 @@ class XMLStream(object):
 
             # clear the scheduler & event queue
             self.scheduler.remove('session timeout checker')
-            self.event_queue = queue.Queue()
+            self.event_queue.clear()
 
             retval = XMLStream.connect(self, self.address[0], self.address[1], self.use_ssl, self.use_tls, True)
             self.reconnect_lock.release()
@@ -477,7 +477,7 @@ class XMLStream(object):
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
             self.wrapped_socket.set()
             ssl_socket = ssl.wrap_socket(self.socket,
-                                         ssl_version=ssl.PROTOCOL_TLSv1,
+                                         ssl_version=ssl.PROTOCOL_SSLv3,
                                          do_handshake_on_connect=False,
                                          ca_certs=self.ca_certs,
                                          cert_reqs=cert_policy)
@@ -1097,4 +1097,41 @@ class XMLStream(object):
                 self.reconnect()
             else:
                 self.disconnect(self)
+from Queue import Queue
             
+class ClearableQueue(Queue):
+
+    def __init__(self, maxsize=0):
+        Queue.__init__(self, maxsize)
+        self.tasks_cleared = 0
+
+    def get_all(self):
+        self.mutex.acquire()
+
+        try:
+            copyOfRemovedEntries = list(self.queue)
+            self.queue.clear()
+            self.unfinished_tasks = 0
+            self.all_tasks_done.notifyAll()
+            self.not_full.notifyAll()
+            self.tasks_cleared += len(copyOfRemovedEntries)
+        finally:
+            self.mutex.release()
+
+        return copyOfRemovedEntries
+
+    def clear(self):
+        self.get_all()
+
+    def task_done(self):
+        self.all_tasks_done.acquire()
+        try:
+            unfinished = self.unfinished_tasks + self.tasks_cleared - 1
+            if unfinished <= 0:
+                if unfinished < 0:
+                    raise ValueError('task_done() called too many times')
+                self.all_tasks_done.notify_all()
+            self.unfinished_tasks = unfinished - self.tasks_cleared
+            self.tasks_cleared = 0
+        finally:
+            self.all_tasks_done.release()   
