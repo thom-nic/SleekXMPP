@@ -104,7 +104,7 @@ class XMLStream(object):
         socket        -- The connection to the server.
         ssl_support   -- Indicates if a SSL library is available for use.
         ssl_version   -- The version of the SSL protocol to use.
-                         Defaults to ssl.PROTOCOL_SSLv3.
+                         Defaults to ssl.PROTOCOL_TLSv1.
         state         -- A state machine for managing the stream's
                          connection state.
         stream_footer -- The start tag and any attributes for the stream's
@@ -173,7 +173,7 @@ class XMLStream(object):
         self.sendXML = self.send_xml
 
         self.ssl_support = SSL_SUPPORT
-        self.ssl_version = ssl.PROTOCOL_SSLv3
+        self.ssl_version = ssl.PROTOCOL_TLSv1
 
         self.state = StateMachine(('disconnected', 'connected'))
         self.state._set_state('disconnected')
@@ -477,7 +477,7 @@ class XMLStream(object):
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
             self.wrapped_socket.set()
             ssl_socket = ssl.wrap_socket(self.socket,
-                                         ssl_version=ssl.PROTOCOL_SSLv3,
+                                         ssl_version=ssl.PROTOCOL_TLSv1,
                                          do_handshake_on_connect=False,
                                          ca_certs=self.ca_certs,
                                          cert_reqs=cert_policy)
