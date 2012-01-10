@@ -481,7 +481,7 @@ class ByteStreamSession(threading.Thread):
                     iq.send(block=False)
                 
         #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': self.sid})
-        self.__plugin.fileFinishedSending(sid=self.sid)
+        self.__plugin.fileFinishedSending(sid=self.sid, )
         self._closeStream()
         self.process = False
         
