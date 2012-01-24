@@ -477,7 +477,7 @@ class XMLStream(object):
             cert_policy = ssl.CERT_NONE if self.ca_certs is None else ssl.CERT_REQUIRED
             self.wrapped_socket.set()
             ssl_socket = ssl.wrap_socket(self.socket,
-                                         ssl_version=ssl.PROTOCOL_TLSv1,
+                                         ssl_version=self.ssl_version,
                                          do_handshake_on_connect=False,
                                          ca_certs=self.ca_certs,
                                          cert_reqs=cert_policy)
