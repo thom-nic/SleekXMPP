@@ -73,9 +73,10 @@ class FileTransferProtocol(base.base_plugin):
             fired event comes with a dict that contains the sid of the bytestream
             as well as the filename.
     
-        fileFinishedSending(self, sid):
+        fileFinishedSending(self, sid, success):
             fires an event that signals that a file has finished receiving.  The
-            fired event comes with a dict that contains the sid of the bytestream.
+            fired event comes with a dict that contains the sid of the bytestream
+            and a boolean value containing the success of the transfer
         
     There are also 2 events that users of this plugin can register to receive notifications:
     FILE_FINISHED_SENDING     - This event is fired after a file send has completed
@@ -122,8 +123,8 @@ class FileTransferProtocol(base.base_plugin):
     def fileFinishedReceiving(self, sid, filename):
         self.xmpp.event(FileTransferProtocol.FILE_FINISHED_RECEIVING, {'sid': sid, 'filename':filename})
     
-    def fileFinishedSending(self, sid):
-        self.xmpp.event(FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': sid})        
+    def fileFinishedSending(self, sid, success):
+        self.xmpp.event(FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': sid, 'success':success})        
     
     
 class xep_0096(base.base_plugin):
@@ -287,6 +288,8 @@ class xep_0096(base.base_plugin):
         
     def _sendCompleteHandler(self, dict):
         xferInfo = self.activeBytestreams.pop(dict['sid'])
+        xferInfo['finished'] = True
+        xferInfo['success'] = dict['success']
         if self.closeTransferCallback:
             self.closeTransferCallback(xferInfo)
     
@@ -399,6 +402,9 @@ def parseRequestXMLToDict(xml):
         protocols.append(elem.text)
     xferInfo['protocols'] = protocols 
     xferInfo['startTime'] = time.time()
+    xferInfo['endTime'] = None
+    xferInfo['finished'] = False
+    xferInfo['success'] = None
     return xferInfo 
 
 def makeAcceptResultIQ(iq, to, protocol_ns):

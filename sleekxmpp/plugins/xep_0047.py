@@ -467,10 +467,13 @@ class ByteStreamSession(threading.Thread):
         '''
         with open(fileName, 'rb') as file:
             self.__sendAckEvent.set()
+            finished_sending = False
             while self.process:
                 if self.__sendAckEvent.wait(1): 
                     data = file.read(self.__fileReadSize)
-                    if data == str(''): break
+                    if data == str(''): 
+                        finished_sending = True
+                        break
                     iq = self.__xmpp.makeIqSet()
                     dataElem = ET.Element('{%s}data' %xep_0047.XMLNS, sid=self.sid, seq=str(self.getNextOutSeqId()))
                     dataElem.text = base64.b64encode(data)
@@ -480,8 +483,7 @@ class ByteStreamSession(threading.Thread):
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
                     iq.send(block=False)
                 
-        #self.__xmpp.event(xep_0096.FileTransferProtocol.FILE_FINISHED_SENDING, {'sid': self.sid})
-        self.__plugin.fileFinishedSending(sid=self.sid, )
+        self.__plugin.fileFinishedSending(sid=self.sid, finished_sending )
         self._closeStream()
         self.process = False
         
