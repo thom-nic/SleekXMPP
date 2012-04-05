@@ -483,7 +483,7 @@ class ByteStreamSession(threading.Thread):
                     self.__xmpp.registerHandler(Callback('Bytestream_send_iq_matcher', MatcherId(iq['id']), self._sendFileAckHandler, thread=False, once=True, instream=False))
                     iq.send(block=False)
                 
-        self.__plugin.fileFinishedSending(sid=self.sid, finished_sending )
+        self.__plugin.fileFinishedSending(self.sid, finished_sending)
         self._closeStream()
         self.process = False
         
