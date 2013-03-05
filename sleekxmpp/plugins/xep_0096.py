@@ -108,7 +108,7 @@ class FileTransferProtocol(base.base_plugin):
             self.acceptTransferCallback = self.xmpp.plugin['xep_0096'].protocolGetAcceptTransferRequest 
             self.fileNameCallback = self.xmpp.plugin['xep_0096'].protocolGetFilename
     
-    def sendFile(self, fileName, to, threaded=True, sid=None):
+    def sendFile(self, fileName, to, threaded=True, sid=None, **kwargs):
         pass
     
     def getSessionStatus(self, sid):

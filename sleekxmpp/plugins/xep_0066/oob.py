@@ -84,7 +84,7 @@ class XEP_0066(xep_0096.FileTransferProtocol):
             self.xmpp.plugin['xep_0030'].add_feature(stanza.OOB.namespace)
             
             
-    def sendFile(self, fileName, to, threaded=True, sid=None):
+    def sendFile(self, fileName, to, threaded=True, sid=None, **kwargs):
         logging.debug("About to send file: %s via oob" %fileName)
         if not os.path.isfile(fileName):
             raise IOError('file: %s not found' %fileName)
@@ -98,8 +98,8 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         if sid is None:
             sid = xep_0096.generateSid()
             
-        iq = self.send_oob(to, "TBD")
-        self.streamSessions[iq["id"]] = {"iq":iq["id"], "url":"URL HERE!", "sid":sid}
+        iq = self.send_oob(to, kwargs["url"])
+        self.streamSessions[iq["id"]] = {"iq":iq["id"], "url":kwargs["url"], "sid":sid}
     
     def getSessionStatus(self, sid):
         '''

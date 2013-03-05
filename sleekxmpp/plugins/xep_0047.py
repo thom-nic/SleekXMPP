@@ -113,7 +113,7 @@ class xep_0047(xep_0096.FileTransferProtocol):
         if self.xmpp.plugin.get('xep_0030'):
             self.xmpp.plugin['xep_0030'].add_feature(xep_0047.XMLNS)
         
-    def sendFile(self, fileName, to, threaded=True, sid=None):
+    def sendFile(self, fileName, to, threaded=True, sid=None, **kwargs):
         '''
         Sends a file to the intended receiver if the receiver is available and 
         willing to accept the transfer.  If the send is requested to be threaded 
