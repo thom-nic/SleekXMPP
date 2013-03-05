@@ -1,27 +1,18 @@
 """
-	SleekXMPP: The Sleek XMPP Library
-	Copyright (C) 2007  Nathanael C. Fritz
-	This file is part of SleekXMPP.
+    SleekXMPP: The Sleek XMPP Library
+    Copyright (C) 2010 Nathanael C. Fritz
+    This file is part of SleekXMPP.
 
-	SleekXMPP is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	SleekXMPP is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with SleekXMPP; if not, write to the Free Software
-	Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+    See the file LICENSE for copying permission.
 """
 from __future__ import with_statement
 from xml.etree import cElementTree as ET
 import logging
 import hashlib
 from . import base
+
+
+log = logging.getLogger(__name__)
 
 
 class xep_0078(base.base_plugin):
@@ -35,14 +26,14 @@ class xep_0078(base.base_plugin):
 		#disabling until I fix conflict with PLAIN
 		#self.xmpp.registerFeature("<auth xmlns='http://jabber.org/features/iq-auth'/>", self.auth)
 		self.streamid = ''
-	
+
 	def check_stream(self, xml):
 		self.streamid = xml.attrib['id']
 		if xml.get('version', '0') != '1.0':
 			self.auth()
-	
+
 	def auth(self, xml=None):
-		logging.debug("Starting jabber:iq:auth Authentication")
+		log.debug("Starting jabber:iq:auth Authentication")
 		auth_request = self.xmpp.makeIqGet()
 		auth_request_query = ET.Element('{jabber:iq:auth}query')
 		auth_request.attrib['to'] = self.xmpp.server
@@ -59,12 +50,12 @@ class xep_0078(base.base_plugin):
 		query.append(username)
 		query.append(resource)
 		if rquery.find('{jabber:iq:auth}digest') is None:
-			logging.warning("Authenticating via jabber:iq:auth Plain.")
+			log.warning("Authenticating via jabber:iq:auth Plain.")
 			password = ET.Element('password')
 			password.text = self.xmpp.password
 			query.append(password)
 		else:
-			logging.debug("Authenticating via jabber:iq:auth Digest")
+			log.debug("Authenticating via jabber:iq:auth Digest")
 			digest = ET.Element('digest')
 			digest.text = hashlib.sha1(b"%s%s" % (self.streamid, self.xmpp.password)).hexdigest()
 			query.append(digest)
@@ -76,6 +67,6 @@ class xep_0078(base.base_plugin):
 				self.xmpp.sessionstarted = True
 			self.xmpp.event("session_start")
 		else:
-			logging.info("Authentication failed")
+			log.info("Authentication failed")
 			self.xmpp.disconnect()
 			self.xmpp.event("failed_auth")
