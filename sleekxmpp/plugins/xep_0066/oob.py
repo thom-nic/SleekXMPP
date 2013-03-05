@@ -249,10 +249,24 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         
         if acceptTransfer:
             self.streamSessions[iq["id"]] = {"iq":iq["id"], "url":iq['query']['url'], "sid":iq['query']['sid']}
+            
             #TODO write code to download the file
-            pass
+            
+            #send the result iq to let the initiator know this client has finished the download
+            iq = self.xmpp.makeIqResult(id=iq["id"])
+            iq['to'] = iq["from"]
+            iq.send(block=False)
+            
+            #Now that we have the file notify xep_0096 so it can run the checksums.
+            del self.streamSessions[iq["id"]]
+            self.fileFinishedReceiving(self.streamSessions[iq["id"]], saveFileAs)
+        else:
+            #failed to download, send back an error iq
+            errIq = self.xmpp.makeIqError(id=iq['id'], condition='not-acceptable')
+            errIq['to'] = iq['from']
+            errIq['error']['type'] = 'modify'
+            errIq.send()
+
+            
         
         
-        #Now that we have the file notify xep_0096 so it can run the checksums.
-        del self.streamSessions[iq["id"]]
-        self.fileFinishedReceiving(self.streamSessions[iq["id"]], saveFileAs)
