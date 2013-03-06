@@ -8,6 +8,7 @@
 
 import logging
 import os
+import urllib2
 
 from sleekxmpp.stanza import Message, Presence, Iq
 from sleekxmpp.exceptions import XMPPError
@@ -16,10 +17,11 @@ from sleekxmpp.xmlstream.handler import Callback
 from sleekxmpp.xmlstream.matcher import StanzaPath
 from sleekxmpp.plugins.xep_0066 import stanza
 import sleekxmpp.plugins.xep_0096 as xep_0096
-
+from sleekxmpp.thirdparty import https
 
 log = logging.getLogger(__name__)
 
+DEFAULT_HTTP_TIMEOUT = 20 #seconds
 
 class XEP_0066(xep_0096.FileTransferProtocol):
     XMLNS = 'jabber:iq:oob'
@@ -76,6 +78,19 @@ class XEP_0066(xep_0096.FileTransferProtocol):
                          self._handle_finished))
         
         self.register_url_handler(handler=self._download_file)
+
+        self.http_timeout = self.config.get('timeout',DEFAULT_HTTP_TIMEOUT)
+        self.ca_certs = self.config.get('ca_certs',None)
+        # TODO could also support HTTP basic auth
+
+        handlers = []
+        if self.ca_certs:
+            handlers.append( https.HTTPSClientAuthHandler( 
+                ca_certs = self.ca_certs ) )
+
+        # This is our HTTP client:
+        self.http = urllib2.build_opener(*handlers)
+
 
     def post_init(self):
         xep_0096.FileTransferProtocol.post_init(self)
@@ -250,16 +265,21 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         if acceptTransfer:
             self.streamSessions[iq["id"]] = {"iq":iq["id"], "url":iq['query']['url'], "sid":iq['query']['sid']}
             
-            #TODO write code to download the file
-            
-            #send the result iq to let the initiator know this client has finished the download
-            iq = self.xmpp.makeIqResult(id=iq["id"])
-            iq['to'] = iq["from"]
-            iq.send(block=False)
-            
-            #Now that we have the file notify xep_0096 so it can run the checksums.
-            del self.streamSessions[iq["id"]]
-            self.fileFinishedReceiving(self.streamSessions[iq["id"]], saveFileAs)
+            try:
+                self.http_get(iq['query']['url'], saveFileAs)
+                #send the result iq to let the initiator know this client has finished the download
+                iq = self.xmpp.makeIqResult(id=iq["id"])
+                iq['to'] = iq["from"]
+                iq.send(block=False)
+                
+                #Now that we have the file notify xep_0096 so it can run the checksums.
+                del self.streamSessions[iq["id"]]
+                self.fileFinishedReceiving(self.streamSessions[iq["id"]], saveFileAs)
+
+            except URLError as ex: # TODO handle HTTP exception
+                log.warn('Error downloading file', ex)
+                # TODO send failure response
+
         else:
             #failed to download, send back an error iq
             errIq = self.xmpp.makeIqError(id=iq['id'], condition='not-acceptable')
@@ -269,4 +289,7 @@ class XEP_0066(xep_0096.FileTransferProtocol):
 
             
         
-        
+    def http_get(self,url, dest):
+        with open(dest,'w') as outfile:
+            resp = self.http.open(url, timeout=self.http_timeout)
+            outfile.write( resp.read() )

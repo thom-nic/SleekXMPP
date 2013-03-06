@@ -6,14 +6,16 @@
     See the file LICENSE for copying permission.
 """
 
-from sleekxmpp.plugins.base import register_plugin
+from sleekxmpp.xmlstream import register_stanza_plugin
+from sleekxmpp.stanza.iq import Iq
 
 from sleekxmpp.plugins.xep_0066 import stanza
 from sleekxmpp.plugins.xep_0066.stanza import OOB, OOBTransfer
 from sleekxmpp.plugins.xep_0066.oob import XEP_0066
 
 
-register_plugin(XEP_0066)
+register_stanza_plugin(Iq, stanza.OOB)
+register_stanza_plugin(Iq, stanza.OOBTransfer)
 
 
 # Retain some backwards compatibility

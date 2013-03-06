@@ -293,7 +293,7 @@ class xep_0096(base.base_plugin):
         if self.closeTransferCallback:
             self.closeTransferCallback(xferInfo)
     
-    def sendFile(self, fileName, to, threaded=True, protocolNS=None):
+    def sendFile(self, fileName, to, threaded=True, protocolNS=None, **kwargs):
         '''
         Sends a file to the intended receiver if the receiver is available and 
         willing to accept the transfer.  If the send is requested to be threaded 
@@ -332,7 +332,10 @@ class xep_0096(base.base_plugin):
                                os.path.getsize(fileName),
                                fileHash=md5.hexdigest())
         result = iq.send(block=True, timeout=10)
-        if result.get('type') == 'error': 
+        if result is False:
+            logging.debug("Stream response timeout to %s, sid: %s", to, sid)
+            raise Exception('Stream response timeout!')
+        elif result.get('type') == 'error': 
             logging.debug('session rejected')
             raise Exception('Session rejected: %s' %result)
             '''
@@ -348,7 +351,8 @@ class xep_0096(base.base_plugin):
         #get the negoiated protocol and send the file
         protocol = result.xml.findall('.//{jabber:x:data}x/{jabber:x:data}field/{jabber:x:data}value')[0].text
         self.activeBytestreams[sid]['selectedProtocol'] = self.bytestreamProtocols[protocol]['protocol']
-        self.activeBytestreams[sid]['selectedProtocol'].sendFile(fileName, to, threaded, sid)
+        self.activeBytestreams[sid]['selectedProtocol'].sendFile(
+                fileName, to, threaded=threaded, sid=sid, **kwargs)
         return sid
         
     def getSessionStatus(self, sid):
