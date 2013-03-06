@@ -5,3 +5,7 @@ build/
 .pydevproject
 *.swp
 *.swo
+.Python
+bin/
+include/
+lib
