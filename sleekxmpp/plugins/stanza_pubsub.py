@@ -60,7 +60,7 @@ class PubsubState(ElementBase):
 		for child in self.xml.getchildren():
 			self.xml.remove(child)
 
-stanzaPlugin(Iq, PubsubState)
+registerStanzaPlugin(Iq, PubsubState)
 
 class PubsubStateEvent(ElementBase):
 	namespace = 'http://jabber.org/protocol/psstate#event'
@@ -70,8 +70,8 @@ class PubsubStateEvent(ElementBase):
 	plugin_attrib_map = {}
 	plugin_tag_map = {}
 
-stanzaPlugin(Message, PubsubStateEvent)
-stanzaPlugin(PubsubStateEvent, PubsubState)
+registerStanzaPlugin(Message, PubsubStateEvent)
+registerStanzaPlugin(PubsubStateEvent, PubsubState)
 
 class Pubsub(ElementBase):
 	namespace = 'http://jabber.org/protocol/pubsub'
