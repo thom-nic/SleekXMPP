@@ -1,4 +1,5 @@
 import urllib2, httplib, ssl, socket
+#import logging
 
 DEFAULT_HTTP_TIMEOUT = 10 #seconds
 
@@ -69,7 +70,8 @@ class HTTPSConnection(httplib.HTTPSConnection):
     def __init__(self, host, **kwargs):
         self.ciphers = kwargs.pop('ciphers',None)
         self.ca_certs = kwargs.pop('ca_certs',None)
-        self.ssl_version = kwargs.pop('ssl_version',ssl.PROTOCOL_SSLv23)
+        ssl_version = kwargs.pop('ssl_version',None)
+        self.ssl_version = ssl.PROTOCOL_SSLv23 if ssl_version is None else ssl_version
 
         httplib.HTTPSConnection.__init__(self,host,**kwargs)
 
