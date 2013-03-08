@@ -58,7 +58,7 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         self.url_handlers = {'global': self._default_handler,
                              'jid': {}}
         
-        self.streamSessions = []
+        self.streamSessions = {}
 
         register_stanza_plugin(Iq, stanza.OOBTransfer)
         register_stanza_plugin(Message, stanza.OOB)
@@ -100,7 +100,7 @@ class XEP_0066(xep_0096.FileTransferProtocol):
             
             
     def sendFile(self, fileName, to, threaded=True, sid=None, **kwargs):
-        logging.debug("About to send file: %s via oob" %fileName)
+        log.debug("About to send file: %s via oob", fileName)
         if not os.path.isfile(fileName):
             raise IOError('file: %s not found' %fileName)
         
@@ -113,20 +113,18 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         if sid is None:
             sid = xep_0096.generateSid()
             
-        iq = self.send_oob(to, kwargs["url"])
+        iq = self.send_oob(to, kwargs["url"], sid=sid)
         self.streamSessions[iq["id"]] = {"iq":iq["id"], "url":kwargs["url"], "sid":sid}
     
     def getSessionStatus(self, sid):
         '''
         Returns the status of the transfer specified by the sid.  If the session
-        is not found none will be returned.
+        is not found None will be returned.
         '''
-        return_session = None
-        for session in self.streamSessions.items():
+        for session in self.streamSessions.iteritems():
             if session["sid"] == sid:
-                return_session = session
-                break
-        return return_session
+                return session
+        return None
     
     def getSessionStatusAll(self):
         return self.streamSessions.values()
@@ -160,7 +158,7 @@ class XEP_0066(xep_0096.FileTransferProtocol):
             else:
                 del self.url_handlers['jid'][jid]
 
-    def send_oob(self, to, url, desc=None, ifrom=None, **iqargs):
+    def send_oob(self, to, url, desc=None, ifrom=None, **kwargs):
         """
         Initiate a basic file transfer by sending the URL of
         a file or other resource.
@@ -182,8 +180,10 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         iq['to'] = to
         iq['from'] = ifrom
         iq['oob_transfer']['url'] = url
+        iq['oob_transfer']['sid'] = kwargs.get('sid',None)
         iq['oob_transfer']['desc'] = desc
-        return iq.send(False)
+        iq.send(False)
+        return iq
 
     def _run_url_handler(self, iq):
         """
@@ -247,42 +247,50 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         Download the file and notify xep-0096 we are finished.
         '''  
         #Check to see if the file transfer should be accepted
+        sid = iq['oob_transfer']['sid']
         acceptTransfer = False
         if self.acceptTransferCallback:
-            acceptTransfer = self.acceptTransferCallback(sid=iq['query']['sid'])
+            acceptTransfer = self.acceptTransferCallback(sid=sid)
         else:
             acceptTransfer = False
                 
         #Ask where to save the file if the callback is present
         saveFileAs = "/dev/null"
         if self.fileNameCallback:
-            saveFileAs = self.fileNameCallback(sid=iq['query']['sid'])
+            saveFileAs = self.fileNameCallback(sid=sid)
             
         #Do not accept a transfer from ourselves
         if self.xmpp.fulljid == iq['from']:
             acceptTransfer = False
         
         if acceptTransfer:
-            self.streamSessions[iq["id"]] = {"iq":iq["id"], "url":iq['query']['url'], "sid":iq['query']['sid']}
+            iq_id = iq["id"]
+            url = iq['oob_transfer']['url']
+            self.streamSessions[iq_id] = {"iq": iq_id, "url": url, "sid": sid}
             
             try:
-                self.http_get(iq['query']['url'], saveFileAs)
+                self.http_get(url, saveFileAs)
                 #send the result iq to let the initiator know this client has finished the download
-                iq = self.xmpp.makeIqResult(id=iq["id"])
+                iq = self.xmpp.makeIqResult(id=iq_id)
                 iq['to'] = iq["from"]
                 iq.send(block=False)
                 
                 #Now that we have the file notify xep_0096 so it can run the checksums.
-                del self.streamSessions[iq["id"]]
-                self.fileFinishedReceiving(self.streamSessions[iq["id"]], saveFileAs)
+                self.fileFinishedReceiving(self.streamSessions[iq_id]['sid'], saveFileAs)
+                del self.streamSessions[iq_id]
 
-            except URLError as ex: # TODO handle HTTP exception
+            except urllib2.URLError as ex: # TODO handle HTTP exception
                 log.warn('Error downloading file', ex)
                 # TODO send failure response
+                errIq = self.xmpp.makeIqError(id=iq_id, condition='item-not-found')
+                errIq['to'] = iq['from']
+                if hasattr(ex,'code'): errIq['error']['code'] = ex.code
+                errIq['error']['type'] = 'cancel'
+                errIq.send()
 
         else:
             #failed to download, send back an error iq
-            errIq = self.xmpp.makeIqError(id=iq['id'], condition='not-acceptable')
+            errIq = self.xmpp.makeIqError(id=iq_id, condition='not-acceptable')
             errIq['to'] = iq['from']
             errIq['error']['type'] = 'modify'
             errIq.send()
@@ -293,3 +301,4 @@ class XEP_0066(xep_0096.FileTransferProtocol):
         with open(dest,'w') as outfile:
             resp = self.http.open(url, timeout=self.http_timeout)
             outfile.write( resp.read() )
+            logging.debug("OOB saved %s to %s", url, dest)
